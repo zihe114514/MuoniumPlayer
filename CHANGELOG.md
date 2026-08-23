@@ -29,6 +29,9 @@
 - 修复「音乐来源」未选中卡片在浅色主题下图标与标题看不见。
 - 修复色块与主题色卡上的图标在深色底上看不见。
 
+### 移除
+- 移除仓库里 Forge MDK 自带的 changelog 文本与已废弃的 LX 自定义源脚本。
+
 ### 说明
 - 重写 README：合并原先重复的两份内容，功能清单按代码逐项核对。
 - 图标字体的生成脚本入库为 `tools/make_hud_settings_icon_font.py`，字形来自 Material Design Icons（Apache-2.0）。
