@@ -28,6 +28,15 @@ public final class ConfigPaths {
     /** Automix (seamless track handover) preferences. */
     public static final File AUTOMIX = new File("config", "muonium/automix.json");
 
+    /**
+     * 「没装 ffmpeg」全屏提示的「永不展示」选择。
+     *
+     * <p>刻意单独一个文件而不是塞进 {@link #HUD}：这个提示要在<b>主菜单</b>就决定要不要弹，
+     * 那时 HUD 配置的读写路径还牵着一整套 HUD 组件；单独一个只有一个布尔值的小文件，读失败也
+     * 只是「再提示一次」，不会影响任何别的设置。</p>
+     */
+    public static final File FFMPEG_NOTICE = new File("config", "muonium/ffmpeg_notice.json");
+
     static {
         migrateLegacyFiles();
     }

@@ -49,6 +49,13 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
 
     float alpha = 0f;
     boolean closing = false;
+    /**
+     * 退场时低于这个不透明度就直接停止绘制并宣告关闭。
+     *
+     * <p>0.09 不是随手取的：{@code NCMScreen} 用 {@code (int)(alpha*255)} 画压暗层，0.09 对应
+     * 23/255，叠在已经恢复绘制的播放器界面上肉眼分辨不出；再低只是白白多画几帧整层内容。</p>
+     */
+    private static final float CLOSE_ALPHA_EPSILON = 0.09f;
 
     Framebuffer baseFb, stencilFb;
 
@@ -251,7 +258,8 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
             // Heights affect all following coordinates. Calculate them before assigning
             // positions so a wrapped/translated line cannot overlap its neighbour.
             for (LyricLine lyric : CloudMusic.lyrics) {
-                lyric.computeHeight(width);
+                // 对唱行按自己那一列的宽度算高度，否则折行数与渲染时不一致，行与行会叠在一起。
+                lyric.computeHeight(LyricDuetGroups.columnWidth(width, lyric.duetSlot));
             }
 
             // A duet is anchored as one block: its first line leads, and the block is lifted by
@@ -291,6 +299,62 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
         return -extra * .5;
     }
 
+    /**
+     * 一行歌词里每个字词的落点：{@code x} 是绝对横坐标，{@code row} 是它落在这一行的第几个折行。
+     * 预先整行算好而不是边画边推进，是右对齐（对唱右列）能成立的前提。
+     */
+    private static final class WordPlacement {
+        final double[] x;
+        final int[] row;
+
+        private WordPlacement(double[] x, int[] row) {
+            this.x = x;
+            this.row = row;
+        }
+    }
+
+    /**
+     * 贪心折行并算出每个字词的落点。
+     *
+     * <p>折行规则与改动前完全一致（累计宽度加上下一个字词就超过列宽时换行），所以独唱行的
+     * 排版结果不变；差别只在于右对齐的行会整体推到列右边界。</p>
+     */
+    private static WordPlacement layoutWords(List<LyricLine.Word> words, double columnLeft,
+                                             double columnWidth, boolean rightAligned) {
+        int count = words.size();
+        double[] widths = new double[count];
+        int[] rows = new int[count];
+        double[] rowWidths = new double[count + 1];
+        int row = 0;
+        double cursor = 0.0;
+        for (int i = 0; i < count; i++) {
+            LyricLine.Word word = words.get(i);
+            widths[i] = FontManager.pf65bold.getStringWidthD(word.word);
+            if (cursor > 0.0 && cursor + widths[i] > columnWidth) {
+                rowWidths[row] = cursor;
+                row++;
+                cursor = 0.0;
+            }
+            rows[i] = row;
+            cursor += widths[i];
+        }
+        rowWidths[row] = cursor;
+
+        double[] xs = new double[count];
+        double[] rowCursor = new double[row + 1];
+        for (int i = 0; i <= row; i++) {
+            // 右列按行宽右对齐；左列（含独唱）一律从列左边界开始，和改动前逐字推进的结果一致。
+            rowCursor[i] = rightAligned
+                    ? columnLeft + columnWidth - Math.min(rowWidths[i], columnWidth)
+                    : columnLeft;
+        }
+        for (int i = 0; i < count; i++) {
+            xs[i] = rowCursor[rows[i]];
+            rowCursor[rows[i]] += widths[i];
+        }
+        return new WordPlacement(xs, rows);
+    }
+
     private static void setLyricPosition(LyricLine lyric, double positionY) {
         lyric.posY = positionY;
         // setPosition also clears the spring velocity/queued target. This is required for
@@ -322,14 +386,20 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
     }
 
     public boolean shouldClose() {
-        return closing && alpha <= 0.02f;
+        return closing && alpha <= CLOSE_ALPHA_EPSILON;
     }
 
     public void onRender(double mouseX, double mouseY, double posX, double posY, double width, double height, int dWheel) {
 
         if (prevMouse && !Mouse.isButtonDown(0)) prevMouse = false;
 
-        alpha = Interpolations.interpolate(alpha, closing ? 0.0f : 1f, 0.3f);
+        // 退出比进入快一档：0.30 的逼近系数要十几帧才跌到原来的 0.02 关闭阈值，那段时间里
+        // 播放器主界面已经露出来了（NCMScreen 在 alpha<=.9 就恢复绘制底层），而这一层还在画
+        // 压暗遮罩、进度条与分隔线，看起来就是"退出后遮罩和线条延迟消失"。
+        alpha = Interpolations.interpolate(alpha, closing ? 0.0f : 1f, closing ? 0.45f : 0.3f);
+        // 剩下这几个百分点已经看不见了，但仍然会整层绘制一遍。alpha 继续衰减（shouldClose 靠它
+        // 判定），但不再画任何东西，于是"残留"被彻底掐掉而不是靠肉眼分辨不出来。
+        if (closing && alpha <= CLOSE_ALPHA_EPSILON) return;
 
         // 面板尺寸动画过程中按真实视口重排。阈值可避免亚像素变化导致每帧重建全部歌词。
         LyricViewport lyricViewport = createLyricViewport(posX, posY, width, height);
@@ -460,23 +530,34 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
                 scrollTarget = 0;
             }
 
-            if (lyric.hoveringAlpha >= .02f)
-                roundedRect(lyricRenderOffsetX - 4, lyric.posY + scrollOffset + lyric.reboundAnimation, lyricsWidth + lyric.reboundAnimation, lyric.height + 2, 8, 4 + 2 * Easing.EASE_IN_OUT_QUAD.getFunction().apply((double) lyric.hoveringAlpha), 1, 1, 1, alpha * lyric.hoveringAlpha * .15f);
+            // 对唱行分左右两列：偶数序号靠左、奇数序号靠右，两位歌手同时点亮时一眼能分出是谁在唱。
+            // 独唱行的列宽 == 整个歌词区，几何与改动之前完全一致。
+            double columnWidth = LyricDuetGroups.columnWidth(lyricsWidth, lyric.duetSlot);
+            double columnLeft = LyricDuetGroups.columnLeft(lyricRenderOffsetX, lyricsWidth, lyric.duetSlot);
+            boolean columnRightAligned = LyricDuetGroups.rightAligned(lyric.duetSlot);
 
-            double renderX = lyricRenderOffsetX + lyric.reboundAnimation;
-            double renderY = lyric.posY + lyric.reboundAnimation + scrollOffset;
+            if (lyric.hoveringAlpha >= .02f)
+                roundedRect(columnLeft - 4, lyric.posY + scrollOffset + lyric.reboundAnimation, columnWidth + lyric.reboundAnimation, lyric.height + 2, 8, 4 + 2 * Easing.EASE_IN_OUT_QUAD.getFunction().apply((double) lyric.hoveringAlpha), 1, 1, 1, alpha * lyric.hoveringAlpha * .15f);
+
+            double lineStep = FontManager.pf65bold.getHeight() * .85 + 4;
+            double renderX = columnLeft + lyric.reboundAnimation;
+            double renderBaseY = lyric.posY + lyric.reboundAnimation + scrollOffset;
+            double renderY = renderBaseY;
 
             lyric.reboundAnimation = Interpolations.interpolate(lyric.reboundAnimation, isCurrentLyric ? 2f : 0f, 0.1f);
 
             List<LyricLine.Word> words = lyric.words;
             if (!words.isEmpty()) {
-                for (LyricLine.Word word : words) {
+                // 折行与每个字词的落点先整行算好，再逐个绘制。原来是边画边判断"超出右边界就换行"，
+                // 那套增量逻辑没法做右对齐（右对齐需要先知道整行有多宽），而且判定用的是 >=，
+                // 右对齐时行末字词恰好压在边界上会被误判成又要换行。
+                WordPlacement placement = layoutWords(words, columnLeft, columnWidth, columnRightAligned);
+                for (int wordIndex = 0; wordIndex < words.size(); wordIndex++) {
+                    LyricLine.Word word = words.get(wordIndex);
                     double wordWidth = FontManager.pf65bold.getStringWidthD(word.word);
 
-                    if (renderX + wordWidth >= lyricRenderOffsetX + lyricsWidth + lyric.reboundAnimation) {
-                        renderX = lyricRenderOffsetX + lyric.reboundAnimation;
-                        renderY += FontManager.pf65bold.getHeight() * .85 + 4;
-                    }
+                    renderX = placement.x[wordIndex] + lyric.reboundAnimation;
+                    renderY = renderBaseY + placement.row[wordIndex] * lineStep;
 
                     if (!lyric.renderEmphasizes) Arrays.fill(word.emphasizes, 2);
 
@@ -740,25 +821,32 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
                         FontManager.pf65bold.drawString(word.word, renderX, renderY - emphasizeWholeWord, hexColor(1, 1, 1, alpha * lyric.alpha));
                     }
 
-                    renderX += wordWidth;
                 }
             } else {
-                String[] strings = FontManager.pf65bold.fitWidth(lyric.lyric, lyricsWidth);
+                String[] strings = FontManager.pf65bold.fitWidth(lyric.lyric, columnWidth);
 
                 for (String string : strings) {
-                    FontManager.pf65bold.drawString(string, renderX, renderY, hexColor(1, 1, 1, alpha * ((lyric.alpha * .6f) + .4f)));
-                    renderY += FontManager.pf65bold.getHeight() * .85 + 4;
+                    double lineX = columnRightAligned
+                            ? columnLeft + columnWidth - FontManager.pf65bold.getStringWidthD(string)
+                            + lyric.reboundAnimation
+                            : renderX;
+                    FontManager.pf65bold.drawString(string, lineX, renderY, hexColor(1, 1, 1, alpha * ((lyric.alpha * .6f) + .4f)));
+                    renderY += lineStep;
                 }
 
-                renderY -= FontManager.pf65bold.getHeight() * .85 + 4;
+                renderY -= lineStep;
             }
 
             if (lyric.translationText != null) {
-                double translationX = lyricRenderOffsetX + lyric.reboundAnimation;
                 double translationY = renderY + FontManager.pf65bold.getHeight() * .85 + 8;
 
-                String[] strings = FontManager.pf34bold.fitWidth(lyric.translationText, lyricsWidth);
+                String[] strings = FontManager.pf34bold.fitWidth(lyric.translationText, columnWidth);
                 for (String string : strings) {
+                    // 译文跟随本行所在列的对齐方式，否则对唱右列的歌词右对齐、译文却贴在左边。
+                    double translationX = columnRightAligned
+                            ? columnLeft + columnWidth - FontManager.pf34bold.getStringWidthD(string)
+                            + lyric.reboundAnimation
+                            : columnLeft + lyric.reboundAnimation;
                     FontManager.pf34bold.drawString(string, translationX, translationY, hexColor(1, 1, 1, alpha * .75f * ((lyric.alpha * .6f) + .4f)));
                     translationY += FontManager.pf34bold.getHeight() + 4;
                 }

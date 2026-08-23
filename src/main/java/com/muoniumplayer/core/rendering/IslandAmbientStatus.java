@@ -19,7 +19,17 @@ final class IslandAmbientStatus {
     enum Kind {
         FPS,
         PING,
-        CLOCK
+        CLOCK,
+        /** 正在播放：歌名 + 歌手，左侧大图标换成封面。 */
+        NOW_PLAYING
+    }
+
+    /** 常驻内容分页。轮换就是在这两页之间切换。 */
+    enum Page {
+        /** 帧率 / 延迟 / 时间。 */
+        STATUS,
+        /** 正在播放的歌曲。 */
+        NOW_PLAYING
     }
 
     /** 数值健康度。渲染层据此选色，判定本身与主题、GL 无关，便于离线校验。 */
@@ -50,12 +60,21 @@ final class IslandAmbientStatus {
         final String unit;
         final Health health;
 
+        /** 是否在数值左边画一枚小图标。正在播放页交给左侧封面，条目本身不再重复画图标。 */
+        final boolean showIcon;
+
         private Chip(Kind kind, String value, String widthTemplate, String unit, Health health) {
+            this(kind, value, widthTemplate, unit, health, true);
+        }
+
+        private Chip(Kind kind, String value, String widthTemplate, String unit, Health health,
+                     boolean showIcon) {
             this.kind = kind;
             this.value = value;
             this.widthTemplate = widthTemplate;
             this.unit = unit;
             this.health = health;
+            this.showIcon = showIcon;
         }
     }
 
@@ -63,18 +82,49 @@ final class IslandAmbientStatus {
     static final class Snapshot {
         final Chip[] chips;
         final long sampledAt;
+        /** 本次采样展示的是哪一页。 */
+        final Page page;
+        /** 玩家此刻是否在移动。状态页的左侧图标据此在心跳字形与跑步动画之间切换。 */
+        final boolean moving;
 
         private Snapshot(Chip[] chips, long sampledAt) {
+            this(chips, sampledAt, Page.STATUS, false);
+        }
+
+        private Snapshot(Chip[] chips, long sampledAt, Page page, boolean moving) {
             this.chips = chips;
             this.sampledAt = sampledAt;
+            this.page = page;
+            this.moving = moving;
         }
 
         boolean isEmpty() {
             return chips.length == 0;
         }
+
+        boolean isNowPlaying() {
+            return page == Page.NOW_PLAYING;
+        }
     }
 
     static final Snapshot EMPTY = new Snapshot(NO_CHIPS, 0L);
+
+    /** 最近一次判定为"在移动"的时刻。用于给移动状态加一点滞回，避免图标在原地抖着换。 */
+    private static long lastMovingAt;
+
+    /** 移动状态的滞回窗口：停下后仍按"移动"再显示这么久，跑步动画不会一步一停。 */
+    static final long MOVING_HOLD_MILLIS = 450L;
+
+    /*
+     * 歌名/歌手的硬字数上限。
+     *
+     * 这两个数字只是防御异常元数据（整段简介塞进歌名之类）的最后一道闸，不再承担排版职责：
+     * 灵动岛现在会自己伸长去装下全文（见 DynamicIslandLayoutCalculator.GROWTH_SCREEN_FRACTION），
+     * 放不下时先缩字号。原来的 22 / 14 是按"卡在基础宽度上"定的，很多正常歌名刚过一半就被
+     * 截成"前半段…"，宽度明明还有余量。
+     */
+    private static final int NOW_PLAYING_TITLE_LIMIT = 64;
+    private static final int NOW_PLAYING_ARTIST_LIMIT = 40;
 
     /**
      * 按配置组装常驻条目。三个开关全关时返回空快照，灵动岛会退回紧凑胶囊而不是画一条空白行。
@@ -108,8 +158,107 @@ final class IslandAmbientStatus {
         return new Snapshot(chips, epochMillis);
     }
 
+    /**
+     * 组装"正在播放"页。没有歌曲时返回空快照，调用方据此跳过这一页。
+     *
+     * <p>宽度模板直接用真实文本（而不是等位数模板）：歌名不像帧率那样每秒都在跳，用真实宽度
+     * 排版更好看；换歌时的宽度变化本来就该看得出来。</p>
+     */
+    static Snapshot describeNowPlaying(String title, String artist, long epochMillis, boolean moving) {
+        String safeTitle = trimText(title, NOW_PLAYING_TITLE_LIMIT);
+        if (safeTitle.isEmpty()) return EMPTY;
+        String safeArtist = trimText(artist, NOW_PLAYING_ARTIST_LIMIT);
+        // 歌手前面补一个分隔点：常驻行的"单位"槽间距只有 2.2 像素，直接接歌名会读成一个词。
+        String artistLabel = safeArtist.isEmpty() ? "" : "· " + safeArtist;
+        Chip[] chips = new Chip[] {
+                new Chip(Kind.NOW_PLAYING, safeTitle, safeTitle, artistLabel, Health.NEUTRAL, false)
+        };
+        return new Snapshot(chips, epochMillis, Page.NOW_PLAYING, moving);
+    }
+
+    /** 截断到指定长度并补省略号。null / 空白一律返回空串。 */
+    private static String trimText(String value, int limit) {
+        if (value == null) return "";
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) return "";
+        if (trimmed.length() <= limit) return trimmed;
+        return trimmed.substring(0, Math.max(1, limit - 1)) + "…";
+    }
+
+    /**
+     * 该显示哪一页。
+     *
+     * <p>刻意写成 {@code now} 的纯函数（不保存"上次翻页时刻"）：常驻岛可能被玩家列表、界面切换
+     * 反复打断，用累计计时会在每次恢复时错一段相位。按绝对时间分片则无论中间中断多久，
+     * 回来时都落在正确的节拍上。</p>
+     *
+     * @param intervalMillis 轮换间隔，非正数时按 6 秒兜底
+     */
+    static Page pageFor(long now, boolean statusAvailable, boolean nowPlayingAvailable,
+                        boolean rotate, double intervalMillis) {
+        if (!nowPlayingAvailable) return Page.STATUS;
+        if (!statusAvailable) return Page.NOW_PLAYING;
+        if (!rotate) return Page.STATUS;
+        double interval = intervalMillis > 0.0 ? intervalMillis : 6000.0;
+        long slot = (long) Math.floor(now / interval);
+        return (slot & 1L) == 0L ? Page.STATUS : Page.NOW_PLAYING;
+    }
+
+    /** 玩家是否在移动。带滞回：停下后 {@link #MOVING_HOLD_MILLIS} 内仍算移动。 */
+    static boolean sampleMoving(long now) {
+        try {
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getMinecraft();
+            if (mc == null || mc.thePlayer == null) {
+                lastMovingAt = 0L;
+                return false;
+            }
+            double delta = Math.abs(mc.thePlayer.posX - mc.thePlayer.prevPosX)
+                    + Math.abs(mc.thePlayer.posY - mc.thePlayer.prevPosY)
+                    + Math.abs(mc.thePlayer.posZ - mc.thePlayer.prevPosZ);
+            if (delta > 0.0035) lastMovingAt = now;
+        } catch (Throwable ignored) {
+            return false;
+        }
+        return lastMovingAt > 0L && now - lastMovingAt <= MOVING_HOLD_MILLIS;
+    }
+
     /** 读取真实游戏状态。任何取值失败都退化成「未知」，绝不让常驻显示把渲染打断。 */
     static Snapshot capture(long now) {
+        boolean moving = sampleMoving(now);
+        Page page = pageFor(now, HudConfig.dynamicIslandAmbientFps || HudConfig.dynamicIslandAmbientPing
+                        || HudConfig.dynamicIslandAmbientClock,
+                HudConfig.dynamicIslandAmbientNowPlaying && hasCurrentTrack(),
+                HudConfig.dynamicIslandAmbientRotate,
+                HudConfig.dynamicIslandAmbientRotateSeconds * 1000.0);
+        if (page == Page.NOW_PLAYING) {
+            Snapshot nowPlaying = captureNowPlaying(now, moving);
+            // 歌曲信息临时取不到（切歌瞬间）时退回状态页，而不是显示一张空卡片。
+            if (!nowPlaying.isEmpty()) return nowPlaying;
+        }
+        return captureStatus(now, moving);
+    }
+
+    /** 当前是否有正在播放的歌曲。任何异常都当作"没有"。 */
+    private static boolean hasCurrentTrack() {
+        try {
+            return com.muoniumplayer.core.ncm.music.CloudMusic.currentlyPlaying != null;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static Snapshot captureNowPlaying(long now, boolean moving) {
+        try {
+            com.muoniumplayer.core.ncm.music.dto.Music music =
+                    com.muoniumplayer.core.ncm.music.CloudMusic.currentlyPlaying;
+            if (music == null) return EMPTY;
+            return describeNowPlaying(music.getName(), music.getArtistsName(), now, moving);
+        } catch (Throwable ignored) {
+            return EMPTY;
+        }
+    }
+
+    private static Snapshot captureStatus(long now, boolean moving) {
         boolean showFps = HudConfig.dynamicIslandAmbientFps;
         boolean showPing = HudConfig.dynamicIslandAmbientPing;
         boolean showClock = HudConfig.dynamicIslandAmbientClock;
@@ -139,7 +288,9 @@ final class IslandAmbientStatus {
                 pingKnown = false;
             }
         }
-        return describe(showFps, showPing, showClock, fps, ping, pingKnown, now);
+        Snapshot status = describe(showFps, showPing, showClock, fps, ping, pingKnown, now);
+        // describe 保持原签名（离线探针在用），移动状态在这里补进快照。
+        return status.isEmpty() ? EMPTY : new Snapshot(status.chips, now, Page.STATUS, moving);
     }
 
     private static Health fpsHealth(int fps) {

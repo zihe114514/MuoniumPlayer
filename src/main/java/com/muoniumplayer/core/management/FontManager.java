@@ -58,6 +58,14 @@ public class FontManager extends AbstractManager {
     public static CFontRenderer actionIcon34, actionIcon38;
     /** QQ Music brand icon font; deliberately separate from Fontello login glyphs. */
     public static CFontRenderer qqMusicIcon16, qqMusicIcon20;
+    /**
+     * 灵动岛状态/结果图标字体（island-status-icons，fontello U+E901~E904 与 U+E803/E807/E808）。
+     *
+     * <p>再开一份字体而不是并进 {@code fontello}：这是另一批 fontello 导出，私用区码位和旧包
+     * （U+E800~E802）会互相覆盖。两档字号分别给常驻状态栏的小图标（12）和左侧通知托盘（16）用，
+     * 字形是按字号栅格化的，共用一档会在其中一处明显发虚。</p>
+     */
+    public static CFontRenderer islandIcon12, islandIcon16;
 
     public static List<CFontRenderer> getAllFontRenderers() {
 
@@ -130,6 +138,8 @@ public class FontManager extends AbstractManager {
         queueIcon38 = create(38, "player-queue-icons");
         actionIcon34 = create(34, "player-action-icons");
         actionIcon38 = create(38, "player-action-icons");
+        islandIcon12 = create(12, "island-status-icons");
+        islandIcon16 = create(16, "island-status-icons");
     }
 
     /**

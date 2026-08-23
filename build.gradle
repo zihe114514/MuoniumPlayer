@@ -30,7 +30,7 @@ plugins {
     id "net.minecraftforge.gradle.forge" version "2.0.2"
 }
 */
-version = "1.2.0"
+version = "1.3.0"
 // Maven/Gradle artifact identity. Runtime compatibility remains anchored to
 // the MuoniumPlayer Forge mod id is declared in MuoniumPlayerMod.
 group = "com.muoniumplayer"

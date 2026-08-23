@@ -37,7 +37,10 @@ public final class LyricDuetGroups {
     public static void mark(List<LyricLine> lines) {
         if (lines == null || lines.isEmpty()) return;
         for (LyricLine line : lines) {
-            if (line != null) line.duetGroup = -1;
+            if (line != null) {
+                line.duetGroup = -1;
+                line.duetSlot = -1;
+            }
         }
 
         int nextGroup = 0;
@@ -60,7 +63,11 @@ public final class LyricDuetGroups {
                     && overlaps(lines.get(end), lines.get(end + 1));
             if (!overlong) {
                 int group = nextGroup++;
-                for (int i = index; i <= end; i++) lines.get(i).duetGroup = group;
+                for (int i = index; i <= end; i++) {
+                    lines.get(i).duetGroup = group;
+                    // 组内序号决定左右列：第一位歌手靠左，第二位靠右，三人组再从左边开始。
+                    lines.get(i).duetSlot = i - index;
+                }
             }
             index = end + 1;
         }
@@ -96,6 +103,31 @@ public final class LyricDuetGroups {
         int end = index;
         while (end + 1 < lines.size() && sharesGroup(lines.get(end + 1), line)) end++;
         return end;
+    }
+
+    /**
+     * 对唱行占歌词区宽度的比例。
+     *
+     * <p>不取 0.5：一半宽度会让中文歌词几乎每句都折行，两列各三四行叠在一起反而更难读。0.74
+     * 是"左右能明显看出错开、又不会把常见句长逼到折行"的折中，两列在中间重叠约一半区域，
+     * 视觉上正是 Apple Music 那种交错排布。</p>
+     */
+    public static final double COLUMN_RATIO = 0.74;
+
+    /** 这一行的可用宽度。独唱行占满整个歌词区。 */
+    public static double columnWidth(double width, int duetSlot) {
+        return duetSlot < 0 ? width : width * COLUMN_RATIO;
+    }
+
+    /** 这一行的左边界。偶数序号贴左，奇数序号贴右。 */
+    public static double columnLeft(double left, double width, int duetSlot) {
+        if (duetSlot < 0 || !rightAligned(duetSlot)) return left;
+        return left + width - columnWidth(width, duetSlot);
+    }
+
+    /** 这一行是否右对齐（右列）。 */
+    public static boolean rightAligned(int duetSlot) {
+        return duetSlot >= 0 && (duetSlot & 1) == 1;
     }
 
     /** 两行时间窗口的交集毫秒数；任一行没有可用窗口时返回 0。 */

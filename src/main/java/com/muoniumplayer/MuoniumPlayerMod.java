@@ -24,10 +24,12 @@ import today.opai.api.interfaces.EventHandler;
 import com.muoniumplayer.core.MuoniumPlayerExtension;
 import com.muoniumplayer.core.MusicHotkeys;
 import com.muoniumplayer.core.ncm.music.CloudMusic;
+import com.muoniumplayer.core.ncm.music.FfmpegNotice;
 import com.muoniumplayer.core.rendering.DownloadDynamicIsland;
 import com.muoniumplayer.core.rendering.Framebuffer;
 import com.muoniumplayer.core.rendering.animation.Interpolations;
 import com.muoniumplayer.core.rendering.rendersystem.RenderSystem;
+import com.muoniumplayer.core.screens.GuiFfmpegNotice;
 import com.muoniumplayer.core.screens.hud.GuiHudEditor;
 
 /**
@@ -51,7 +53,7 @@ public class MuoniumPlayerMod {
 
     public static final String MOD_ID = "muonium";
     public static final String MOD_NAME = "MuoniumPlayer";
-    public static final String MOD_VERSION = "1.2.0";
+    public static final String MOD_VERSION = "1.3.0";
 
     /** 按键分类名，在「选项 → 控制」中作为分组标题显示。 */
     public static final String KEY_CATEGORY = "key.categories.muonium";
@@ -114,6 +116,11 @@ public class MuoniumPlayerMod {
         // 只注册 Forge EVENT_BUS 会导致 onClientTick 永远不执行，按键和模块循环因此看起来像“Mod 未加载”。
         MinecraftForge.EVENT_BUS.register(this);
         FMLCommonHandler.instance().bus().register(this);
+
+        // 动态封面与 B 站音频解析都要外部 ffmpeg。这里只是在守护线程上探一次并把结论缓存下来：
+        // 缺少时由 GuiFfmpegNotice 在主菜单弹一次全屏提示，同时也让 HUD 编辑器的「未检测到 ffmpeg」
+        // 标签在用户放第一首歌之前就有结论。探测会创建子进程，绝不能放在主线程上。
+        FfmpegNotice.beginProbe();
     }
 
     // ==================== Forge 事件桥接 ====================
@@ -150,6 +157,12 @@ public class MuoniumPlayerMod {
                 module.onTick();
             }
         }
+
+        // ---- 缺少 ffmpeg 的一次性全屏提示 ----
+        // 每 tick 问一次而不是在 GuiOpenEvent 里换掉主菜单：探测在后台线程上跑，主菜单出现的那一刻
+        // 结论往往还没出来，换 GUI 只有一次机会，轮询则下一 tick 再问一次就行。内部自带
+        // 「本次启动只弹一次」与「永不展示」两道闸，条件不满足时只是一次布尔判断。
+        GuiFfmpegNotice.tickAutoShow(mc);
 
         // ---- 可配置按键检测（仅在未打开 GUI 时响应，避免与界面内输入冲突）----
         // isPressed() 为上升沿触发：按下一次返回 true 一次，按住不重复，无需手动维护上一帧状态。

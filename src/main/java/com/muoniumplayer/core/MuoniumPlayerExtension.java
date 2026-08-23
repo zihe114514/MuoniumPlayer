@@ -28,7 +28,7 @@ public class MuoniumPlayerExtension {
 
     public static final String NAME = "MuoniumPlayer";
     public static final String AUTHOR = "IzumiiKonata";
-    public static final String VERSION = "1.2.0";
+    public static final String VERSION = "1.3.0";
 
     @Getter
     private static final MuoniumPlayerExtension instance = new MuoniumPlayerExtension();

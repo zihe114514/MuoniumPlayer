@@ -44,6 +44,9 @@ public final class NeteasePlaybackHistoryReporter {
         final Music startedSong = song;
         final PlayList startedSource = source;
         MultiThreadingUtil.runAsync(() -> {
+            // 上报开始也给一条反馈：走的是和上报结果同一条最低优先级排队通道，不会抢占任何
+            // 用户主动触发的卡片，只是让"正在上报"这一段有可见状态而不是凭空出现结果。
+            DownloadDynamicIsland.showNeteaseUploadStarted("听歌历史上报");
             NeteaseClientLogUploader.UploadResult result =
                     NeteaseClientLogUploader.uploadPlayView(startedSong, startedSource);
             if (result.isSuccess()) {
@@ -90,6 +93,7 @@ public final class NeteasePlaybackHistoryReporter {
         final int finalPlayedSeconds = (int) Math.min(Integer.MAX_VALUE, playedSeconds);
         final EndReason finalReason = reason;
         MultiThreadingUtil.runAsync(() -> {
+            DownloadDynamicIsland.showNeteaseUploadStarted("听歌时长上报");
             NeteaseClientLogUploader.UploadResult result =
                     NeteaseClientLogUploader.uploadPlayDuration(song, source, finalPlayedSeconds, finalReason);
             if (result.isSuccess()) {

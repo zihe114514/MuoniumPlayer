@@ -1,7 +1,7 @@
 package com.muoniumplayer.core.screens.ncm;
 
 /** Stateless viewport, timing and sizing calculations for the full-screen lyric panel. */
-final class LyricsPanelGeometry {
+public final class LyricsPanelGeometry {
 
     private LyricsPanelGeometry() {
     }
@@ -50,7 +50,7 @@ final class LyricsPanelGeometry {
      * @param scale    本帧的放大倍率，{@code <= 1} 时直接返回中心
      * @return 应当传给 translate/scale/translate 的 X 锚点
      */
-    static double clampScaleAnchorX(double left, double width, double scale, double clipLeft, double clipRight) {
+    public static double clampScaleAnchorX(double left, double width, double scale, double clipLeft, double clipRight) {
         double center = left + width * .5;
         if (scale <= 1.0001 || width <= 0) return center;
 

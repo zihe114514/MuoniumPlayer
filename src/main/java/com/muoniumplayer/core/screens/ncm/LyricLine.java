@@ -53,6 +53,12 @@ public class LyricLine {
      */
     public int duetGroup = -1;
 
+    /**
+     * 行在对唱组内的序号，{@code -1} 表示独唱行。渲染层据此决定这一行排在左列还是右列
+     * （偶数序号靠左、奇数序号靠右），从而让同时演唱的两位歌手左右分开显示。
+     */
+    public int duetSlot = -1;
+
     public final SpringAnimation spring = new SpringAnimation(new SpringParams(.9, 15, 90, false));
 
     // MusicLyricsWidgets fields

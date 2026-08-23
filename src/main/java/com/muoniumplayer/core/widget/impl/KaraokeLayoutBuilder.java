@@ -108,10 +108,30 @@ final class KaraokeLayoutBuilder {
     static final class Layout {
         final String[] primaryLines;
         final List<Segment> segments;
+        /**
+         * 每个物理行的真实步进宽度 = 该行所有片段宽度之和。
+         *
+         * <p>不能用 {@code font.getStringWidthD(primaryLines[i])} 代替：那个值含字间 kerning，
+         * 而片段的 {@code offsetX} 是逐词宽度累加出来的、不含 kerning。两者相差通常一到几像素。
+         * 左对齐时看不出来（都从内容区左边缘起算），但<b>右对齐</b>时对齐基准用整行宽度、字词落点
+         * 用累加宽度，行尾就会正好溢出这个差值 —— 对唱行被强制右对齐，所以只在对唱段落露出来。</p>
+         */
+        final double[] lineAdvances;
 
         private Layout(String[] primaryLines, List<Segment> segments) {
             this.primaryLines = primaryLines;
             this.segments = segments;
+            this.lineAdvances = new double[primaryLines.length];
+            for (Segment segment : segments) {
+                if (segment.lineIndex >= 0 && segment.lineIndex < this.lineAdvances.length) {
+                    this.lineAdvances[segment.lineIndex] += segment.width;
+                }
+            }
+        }
+
+        /** 第 {@code lineIndex} 个物理行的步进宽度；越界时回退到 0（空行）。 */
+        double lineAdvance(int lineIndex) {
+            return lineIndex >= 0 && lineIndex < lineAdvances.length ? lineAdvances[lineIndex] : 0.0;
         }
     }
 

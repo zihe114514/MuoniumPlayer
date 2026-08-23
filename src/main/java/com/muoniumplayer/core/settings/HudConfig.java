@@ -78,6 +78,17 @@ public final class HudConfig {
     public static float osdKaraokeBloomStrength = 0.46f;
     public static float osdKaraokePulseStrength = 0.06f;
     public static float osdKaraokeSmoothing = 0.85f;
+    /**
+     * 桌面歌词里对唱两行的左右分列幅度。
+     *
+     * <p>{@code 1} = 一行完全贴内容区左边缘、另一行完全贴右边缘（改动之前的行为）；{@code 0} = 两行
+     * 都摆在正中间（还是分两行渲染，只是不再左右分开）。中间值是在「完全居中」和「完全贴边」之间线性
+     * 插值，所以调小只会让两行往中间收，永远不会把文字推出内容区。</p>
+     *
+     * <p>只作用于桌面歌词（OSD）。全屏歌词页的对唱分列走的是 {@code LyricDuetGroups.columnLeft}
+     * 那条独立的分栏逻辑，不受这一项影响。</p>
+     */
+    public static float osdDuetSpread = 0.55f;
 
     // Ordinary (non-current) lyric rows.
     public static float normalOpacity = 0.48f;
@@ -133,6 +144,18 @@ public final class HudConfig {
     public static boolean dynamicIslandAmbientPing = true;
     /** 常驻时显示系统时间(时:分)。 */
     public static boolean dynamicIslandAmbientClock = true;
+    /**
+     * 常驻时把"正在播放"作为一页参与显示:左侧换成歌曲封面(有动态封面时优先),右侧显示歌名与歌手。
+     * 没有正在播放的歌曲时这一页自动跳过,不会留一张空卡片。
+     */
+    public static boolean dynamicIslandAmbientNowPlaying = true;
+    /**
+     * 常驻内容轮换。打开后"状态页(帧率/延迟/时间)"与"正在播放页"按 {@link #dynamicIslandAmbientRotateSeconds}
+     * 交替显示;关掉则固定停在状态页(状态三项全关时才固定显示正在播放页)。
+     */
+    public static boolean dynamicIslandAmbientRotate = true;
+    /** 常驻内容轮换间隔(秒)。 */
+    public static float dynamicIslandAmbientRotateSeconds = 6.0f;
 
     /**
      * 网易云动态封面(需要外部 ffmpeg 抽帧)。关掉后桌面歌曲信息、全屏歌词页与播放条一律用静态封面。
@@ -164,6 +187,7 @@ public final class HudConfig {
         osdKaraokeBloomStrength = 0.46f;
         osdKaraokePulseStrength = 0.06f;
         osdKaraokeSmoothing = 0.85f;
+        osdDuetSpread = 0.55f;
         normalOpacity = 0.48f;
         normalScale = 0.94f;
         normalGlowStrength = 0.14f;
@@ -194,6 +218,9 @@ public final class HudConfig {
         dynamicIslandAmbientFps = true;
         dynamicIslandAmbientPing = true;
         dynamicIslandAmbientClock = true;
+        dynamicIslandAmbientNowPlaying = true;
+        dynamicIslandAmbientRotate = true;
+        dynamicIslandAmbientRotateSeconds = 6.0f;
     }
 
     /** 恢复封面相关外观。 */
@@ -240,6 +267,7 @@ public final class HudConfig {
             osdKaraokeBloomStrength = clamp01(getFloat(o, "osdKaraokeBloomStrength", osdKaraokeBloomStrength));
             osdKaraokePulseStrength = clamp(getFloat(o, "osdKaraokePulseStrength", osdKaraokePulseStrength), 0.0f, 0.15f);
             osdKaraokeSmoothing = clamp01(getFloat(o, "osdKaraokeSmoothing", osdKaraokeSmoothing));
+            osdDuetSpread = clamp01(getFloat(o, "osdDuetSpread", osdDuetSpread));
 
             normalOpacity = clamp(getFloat(o, "normalOpacity", normalOpacity), 0.15f, 1.0f);
             normalScale = clamp(getFloat(o, "normalScale", normalScale), 0.85f, 1.05f);
@@ -269,6 +297,10 @@ public final class HudConfig {
             dynamicIslandAmbientFps = getBoolean(o, "dynamicIslandAmbientFps", dynamicIslandAmbientFps);
             dynamicIslandAmbientPing = getBoolean(o, "dynamicIslandAmbientPing", dynamicIslandAmbientPing);
             dynamicIslandAmbientClock = getBoolean(o, "dynamicIslandAmbientClock", dynamicIslandAmbientClock);
+        dynamicIslandAmbientNowPlaying = getBoolean(o, "dynamicIslandAmbientNowPlaying", dynamicIslandAmbientNowPlaying);
+        dynamicIslandAmbientRotate = getBoolean(o, "dynamicIslandAmbientRotate", dynamicIslandAmbientRotate);
+        dynamicIslandAmbientRotateSeconds = clamp(getFloat(o, "dynamicIslandAmbientRotateSeconds",
+                dynamicIslandAmbientRotateSeconds), 2.0f, 30.0f);
 
             animatedCoverEnabled = getBoolean(o, "animatedCoverEnabled", animatedCoverEnabled);
         } catch (Throwable ignored) {
@@ -306,6 +338,7 @@ public final class HudConfig {
             o.addProperty("osdKaraokeBloomStrength", osdKaraokeBloomStrength);
             o.addProperty("osdKaraokePulseStrength", osdKaraokePulseStrength);
             o.addProperty("osdKaraokeSmoothing", osdKaraokeSmoothing);
+            o.addProperty("osdDuetSpread", osdDuetSpread);
 
             o.addProperty("normalOpacity", normalOpacity);
             o.addProperty("normalScale", normalScale);
@@ -334,6 +367,9 @@ public final class HudConfig {
             o.addProperty("dynamicIslandAmbientFps", dynamicIslandAmbientFps);
             o.addProperty("dynamicIslandAmbientPing", dynamicIslandAmbientPing);
             o.addProperty("dynamicIslandAmbientClock", dynamicIslandAmbientClock);
+        o.addProperty("dynamicIslandAmbientNowPlaying", dynamicIslandAmbientNowPlaying);
+        o.addProperty("dynamicIslandAmbientRotate", dynamicIslandAmbientRotate);
+        o.addProperty("dynamicIslandAmbientRotateSeconds", dynamicIslandAmbientRotateSeconds);
 
             o.addProperty("animatedCoverEnabled", animatedCoverEnabled);
 

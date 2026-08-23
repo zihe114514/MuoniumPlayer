@@ -20,6 +20,7 @@ public enum HudSetting {
     OSD_BLOOM("OSD晕染程度", 0.00f, 1.00f),
     OSD_PULSE("OSD逐字放大", 0.00f, 0.15f),
     OSD_SMOOTHNESS("OSD动画平滑", 0.00f, 1.00f),
+    OSD_DUET_SPREAD("OSD对唱分列", 0.00f, 1.00f),
     NORMAL_OPACITY("普通透明度", 0.15f, 1.00f),
     NORMAL_SCALE("普通缩放", 0.85f, 1.05f),
     NORMAL_GLOW("微光程度", 0.00f, 0.65f),
@@ -39,7 +40,8 @@ public enum HudSetting {
     DYNAMIC_ISLAND_CONTENT_SPEED("内容切换速度", 0.40f, 2.50f),
     DYNAMIC_ISLAND_ENTRANCE_DURATION("入场时长(ms)", 160.0f, 1200.0f),
     DYNAMIC_ISLAND_OVERSHOOT("入场回弹", 0.00f, 2.00f),
-    DYNAMIC_ISLAND_SPINNER_SPEED("加载转速", 0.30f, 3.00f);
+    DYNAMIC_ISLAND_SPINNER_SPEED("加载转速", 0.30f, 3.00f),
+    DYNAMIC_ISLAND_AMBIENT_ROTATE("常驻轮换间隔(s)", 2.00f, 30.00f);
 
     private final String label;
     private final float min;
@@ -78,6 +80,7 @@ public enum HudSetting {
             case OSD_BLOOM: return HudConfig.osdKaraokeBloomStrength;
             case OSD_PULSE: return HudConfig.osdKaraokePulseStrength;
             case OSD_SMOOTHNESS: return HudConfig.osdKaraokeSmoothing;
+            case OSD_DUET_SPREAD: return HudConfig.osdDuetSpread;
             case NORMAL_OPACITY: return HudConfig.normalOpacity;
             case NORMAL_SCALE: return HudConfig.normalScale;
             case NORMAL_GLOW: return HudConfig.normalGlowStrength;
@@ -98,6 +101,7 @@ public enum HudSetting {
             case DYNAMIC_ISLAND_ENTRANCE_DURATION: return HudConfig.dynamicIslandEntranceDuration;
             case DYNAMIC_ISLAND_OVERSHOOT: return HudConfig.dynamicIslandOvershoot;
             case DYNAMIC_ISLAND_SPINNER_SPEED: return HudConfig.dynamicIslandSpinnerSpeed;
+            case DYNAMIC_ISLAND_AMBIENT_ROTATE: return HudConfig.dynamicIslandAmbientRotateSeconds;
             default: throw new IllegalStateException("Unknown HUD setting: " + this);
         }
     }
@@ -118,6 +122,7 @@ public enum HudSetting {
             case OSD_BLOOM: HudConfig.osdKaraokeBloomStrength = clamped; break;
             case OSD_PULSE: HudConfig.osdKaraokePulseStrength = clamped; break;
             case OSD_SMOOTHNESS: HudConfig.osdKaraokeSmoothing = clamped; break;
+            case OSD_DUET_SPREAD: HudConfig.osdDuetSpread = clamped; break;
             case NORMAL_OPACITY: HudConfig.normalOpacity = clamped; break;
             case NORMAL_SCALE: HudConfig.normalScale = clamped; break;
             case NORMAL_GLOW: HudConfig.normalGlowStrength = clamped; break;
@@ -138,6 +143,7 @@ public enum HudSetting {
             case DYNAMIC_ISLAND_ENTRANCE_DURATION: HudConfig.dynamicIslandEntranceDuration = clamped; break;
             case DYNAMIC_ISLAND_OVERSHOOT: HudConfig.dynamicIslandOvershoot = clamped; break;
             case DYNAMIC_ISLAND_SPINNER_SPEED: HudConfig.dynamicIslandSpinnerSpeed = clamped; break;
+            case DYNAMIC_ISLAND_AMBIENT_ROTATE: HudConfig.dynamicIslandAmbientRotateSeconds = clamped; break;
             default: throw new IllegalStateException("Unknown HUD setting: " + this);
         }
     }

@@ -61,11 +61,14 @@ public class PlaylistPanel extends NCMPanel {
         this.getChildren().clear();
         this.musicsLoading = true;
 
+        // 搜索结果页不放返回按钮：搜索是从左侧导航栏的搜索框直接进入的，右上角这枚返回键在那里
+        // 没有对应的"上一页"，只会把内容区右上角挤掉一块。歌单详情、发现页曲目列表照旧保留。
+        boolean backButtonAllowed = showBackButton && !playList.isSearchResultList();
         RoundedButtonWidget btnBack = new RoundedButtonWidget(FontelloIcons.BACK, FontManager.fontello18);
         this.addChild(btnBack);
         btnBack.setShouldOverrideMouseCursor(true);
         btnBack.setBeforeRenderCallback(() -> {
-            btnBack.setHidden(!showBackButton);
+            btnBack.setHidden(!backButtonAllowed);
             btnBack.setBounds(28, 22);
             btnBack.setPosition(Math.max(8, getWidth() - btnBack.getWidth() - 12), 8);
             btnBack.setRadius(6);

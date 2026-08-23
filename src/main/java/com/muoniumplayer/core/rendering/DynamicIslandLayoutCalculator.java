@@ -12,6 +12,18 @@ final class DynamicIslandLayoutCalculator {
     static final double MIN_BASE_WIDTH = 160.0;
     static final double MAX_BASE_WIDTH = 720.0;
 
+    /**
+     * 文案放不下时，灵动岛最多可以伸长到「屏幕可用宽度」的这个比例。
+     *
+     * <p>「灵动岛基础宽度」是<b>静息宽度</b>而不是硬上限：短文案时灵动岛停在基础宽度上（滑块
+     * 依旧直接可见），文案更长时它自己伸长去装下全文，而不是把后半段用省略号吃掉。这里留出
+     * 约两成余量，是为了让再长的文案也不会顶到屏幕左右边缘、始终看得出这是一枚悬浮胶囊。</p>
+     *
+     * <p>伸长之后如果<i>连屏幕都装不下</i>，才会依次退化为「缩字号」→「省略号」，
+     * 见 {@link #calculate} 里的三级降级。</p>
+     */
+    static final double GROWTH_SCREEN_FRACTION = .82;
+
     private DynamicIslandLayoutCalculator() {
     }
 
@@ -40,8 +52,20 @@ final class DynamicIslandLayoutCalculator {
             targetHeight += systemCard ? 8.0 : 7.0;
         }
 
-        double titleWidth = FontManager.pf12.getStringWidthD(title);
-        double valueWidth = FontManager.pf14bold.getStringWidthD(value);
+        /*
+         * 必须按「渲染时真正用的那个字体」量文本，否则量出来的宽度和实际排版对不上，
+         * 岛会按偏小的宽度定尺寸、真正绘制时反而放不下，于是又出现省略号。
+         *
+         * 通知态：标题 pf12、正文 pf14bold。
+         * 下载态：标题 pf14bold（"正在加载歌曲" / "加载完成"）、正文 pf12（速度 / "可以开始播放"）。
+         * 这两组是反过来的，原来统一按通知态量，下载态的标题因此被低估了一号字。
+         */
+        double titleWidth = noticeMode
+                ? FontManager.pf12.getStringWidthD(title)
+                : FontManager.pf14bold.getStringWidthD(title);
+        double valueWidth = noticeMode
+                ? FontManager.pf14bold.getStringWidthD(value)
+                : FontManager.pf12.getStringWidthD(value);
         double widestText = Math.max(titleWidth, valueWidth);
         double configuredTextScale = DynamicIslandMath.clamp(HudConfig.dynamicIslandTextScale,
                 minAutoTextScale, maxAutoTextScale);
@@ -52,16 +76,21 @@ final class DynamicIslandLayoutCalculator {
         }
 
         double screenMaxWidth = Math.max(compactWidth, (screenWidth - 12.0) / configuredScale);
-        // "灵动岛基础宽度" is a real base width, not a passive ceiling. Previously it was only
-        // fed into Math.max(configured, desired), so the natural text width always won and dragging
-        // the slider changed nothing. Now the configured value scales the per-style minimum width and
-        // caps how far copy may stretch the island, so both directions of the slider are visible.
+        /*
+         * "灵动岛基础宽度" is a real base width, not a passive ceiling. Previously it was only
+         * fed into Math.max(configured, desired), so the natural text width always won and dragging
+         * the slider changed nothing. It therefore scales the per-style minimum (resting) width.
+         *
+         * 但它<b>不再</b>同时当作硬上限：长文案会被截成"前半段…"，后半段完全看不到。现在改成
+         * 三级降级 —— ① 优先让灵动岛自己伸长去装下全文（上限是屏幕可用宽度的
+         * GROWTH_SCREEN_FRACTION）；② 连屏幕都装不下才缩字号（下限 minAutoTextScale）；
+         * ③ 缩到底还是放不下才由渲染层补省略号。日常长度的歌名/失败原因在第 ① 级就解决了。
+         */
         double configuredBaseWidth = DynamicIslandMath.clamp(HudConfig.dynamicIslandMaxWidth,
                 MIN_BASE_WIDTH, MAX_BASE_WIDTH);
         double baseWidthRatio = configuredBaseWidth / DEFAULT_BASE_WIDTH;
         double scaledMinWidth = minWidth * baseWidthRatio;
-        double desiredWidth = sideReserve + widestText * configuredTextScale;
-        double maxWidth = Math.min(screenMaxWidth, Math.max(scaledMinWidth, configuredBaseWidth));
+        double maxWidth = growthCeiling(scaledMinWidth, configuredBaseWidth, screenMaxWidth);
         double safeMinWidth = Math.min(scaledMinWidth, maxWidth);
         double textScale = configuredTextScale;
         if (widestText > .01) {
@@ -87,7 +116,9 @@ final class DynamicIslandLayoutCalculator {
         double configuredBaseWidth = DynamicIslandMath.clamp(HudConfig.dynamicIslandMaxWidth,
                 MIN_BASE_WIDTH, MAX_BASE_WIDTH);
         double scaledMinWidth = minWidth * (configuredBaseWidth / DEFAULT_BASE_WIDTH);
-        double maxWidth = Math.min(screenMaxWidth, Math.max(scaledMinWidth, configuredBaseWidth));
+        // 与通知态同一条伸长规则：常驻的「正在播放」页歌名长度差异很大，卡在基础宽度上就只能
+        // 截断。宽度变化本身有动画，换歌时看到的是一次平滑变形而不是跳变。
+        double maxWidth = growthCeiling(scaledMinWidth, configuredBaseWidth, screenMaxWidth);
         double safeMinWidth = Math.min(scaledMinWidth, maxWidth);
         double targetWidth = DynamicIslandMath.clamp(sideReserve + Math.max(0.0, contentWidth),
                 safeMinWidth, maxWidth);
@@ -99,8 +130,23 @@ final class DynamicIslandLayoutCalculator {
         double screenMaxWidth = Math.max(60.0, (screenWidth - 12.0) / configuredScale);
         double configuredBaseWidth = DynamicIslandMath.clamp(HudConfig.dynamicIslandMaxWidth,
                 MIN_BASE_WIDTH, MAX_BASE_WIDTH);
-        double maxWidth = Math.min(screenMaxWidth, configuredBaseWidth);
+        // 预算同样按伸长后的上限给，否则常驻内容会先被"缩字号"这一级吃掉，
+        // 灵动岛还没来得及伸长就已经把歌名压扁了。
+        double maxWidth = growthCeiling(0.0, configuredBaseWidth, screenMaxWidth);
         return Math.max(24.0, maxWidth - styleSideReserve(style));
+    }
+
+    /**
+     * 灵动岛允许伸长到的最大宽度。
+     *
+     * <p>至少要能装下按样式最小宽度和基础宽度（否则窄屏上滑块会被无声吞掉），并允许一直长到
+     * 屏幕可用宽度的 {@link #GROWTH_SCREEN_FRACTION}；最终一定不超过屏幕可用宽度。</p>
+     */
+    private static double growthCeiling(double scaledMinWidth, double configuredBaseWidth,
+                                        double screenMaxWidth) {
+        double preferred = Math.max(Math.max(scaledMinWidth, configuredBaseWidth),
+                screenMaxWidth * GROWTH_SCREEN_FRACTION);
+        return Math.min(screenMaxWidth, preferred);
     }
 
     private static double styleMinWidth(DynamicIslandStyle style, boolean noticeMode) {

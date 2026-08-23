@@ -4,11 +4,16 @@ import org.lwjgl.opengl.GL11;
 import com.muoniumplayer.core.interfaces.SharedConstants;
 import com.muoniumplayer.core.interfaces.SharedRenderingConstants;
 import com.muoniumplayer.core.management.FontManager;
+import com.muoniumplayer.core.ncm.music.CloudMusic;
+import com.muoniumplayer.core.ncm.music.dto.Music;
 import com.muoniumplayer.core.rendering.font.CFontRenderer;
 import com.muoniumplayer.core.rendering.animation.Interpolations;
 import com.muoniumplayer.core.rendering.rendersystem.RenderSystem;
+import com.muoniumplayer.core.rendering.texture.DynamicTexture;
+import com.muoniumplayer.core.rendering.texture.ITextureObject;
 import com.muoniumplayer.core.screens.ncm.NCMTheme;
 import com.muoniumplayer.core.settings.HudConfig;
+import com.muoniumplayer.core.utils.Location;
 
 import java.awt.Color;
 import java.util.ArrayDeque;
@@ -276,6 +281,15 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         publishNotice(IslandNoticeType.PLAYBACK_ERROR, "播放失败", safeSong + " · " + safeReason);
     }
 
+    /**
+     * 网易云上报进行中的提示。刻意和上报结果同属最低优先级并走排队通道：它是后台遥测，
+     * 不能抢占任何用户主动触发的反馈，也不做 persistent（否则会插队并需要超时兜底）。
+     */
+    public static void showNeteaseUploadStarted(String label) {
+        publishNotice(IslandNoticeType.NETEASE_UPLOADING, safeNoticeValue(label, "网易云上报"),
+                "正在上报到网易云客户端");
+    }
+
     /** Shows the immediate recent-play upload result and request latency. */
     public static void showRecentPlayUploadSuccess(long elapsedMillis) {
         publishNotice(IslandNoticeType.RECENT_PLAY_SUCCESS, "听歌历史上报",
@@ -526,7 +540,10 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
     /** NetEase cumulative listening-duration uploads are non-interactive telemetry. */
     private static boolean isLowestPriorityNotice(IslandNoticeType type) {
         return type == IslandNoticeType.LISTENING_DURATION_SUCCESS
-                || type == IslandNoticeType.LISTENING_DURATION_ERROR;
+                || type == IslandNoticeType.LISTENING_DURATION_ERROR
+                // 上报进行中与上报结果是同一条遥测链路，优先级必须一致，否则"上报中"会插到
+                // 用户触发的反馈前面，而它的结果卡片还老实排在后面。
+                || type == IslandNoticeType.NETEASE_UPLOADING;
     }
 
     /** Volume and persistent progress/status cards stay immediate rather than being queued. */
@@ -704,8 +721,27 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         boolean sourceNoticePersistent = noticePersistent;
         boolean sourceNoticeQueueMode = noticeUsesQueueInterval;
 
+        // 场合门控：游戏外（主菜单/未进世界）与玩家列表打开时整块不画；播放器界面里只放通知，
+        // 常驻状态栏让位。判定见 IslandVisibilityGate。
+        IslandVisibilityGate.Scene scene = IslandVisibilityGate.capture();
+        if (!IslandVisibilityGate.allowSurface(scene)) {
+            // 直接把动画状态归零而不是原地冻结：下次允许显示时照常播一次入场，
+            // 不会从上次被打断的半展开姿态突然跳出来。
+            visibility = 0f;
+            expansion = 0.0;
+            contentAlpha = 0f;
+            ambientBlend = 0f;
+            animatedExpandedWidth = -1.0;
+            animatedExpandedHeight = -1.0;
+            previousAlwaysOn = false;
+            ambientSnapshot = IslandAmbientStatus.EMPTY;
+            ambientSampledAt = 0L;
+            return;
+        }
+
         boolean enabled = HudConfig.dynamicIslandEnabled;
-        boolean alwaysOn = enabled && HudConfig.dynamicIslandAlwaysOn;
+        boolean alwaysOn = enabled && HudConfig.dynamicIslandAlwaysOn
+                && IslandVisibilityGate.allowAmbient(scene);
         // 常驻内容按固定节拍采样：帧率和延迟每帧都在抖，直接跟帧读会让数字闪烁得没法看。
         if (alwaysOn) {
             if (ambientSampledAt <= 0L || now - ambientSampledAt >= IslandAmbientStatus.SAMPLE_INTERVAL_MILLIS) {
@@ -1114,7 +1150,7 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         api.getGLStateManager().pushMatrix();
         if (musicFocus) {
             renderMusicFocusArtwork(iconX, iconY, height, iconAlpha, accentColor, iconAccentColor, now,
-                    preview, noticeMode, activeNoticeType, success, ambientMix);
+                    preview, noticeMode, activeNoticeType, success, ambientMix, ambient);
         } else {
             double iconPlateBase = systemCard ? 17.0 : (liquidGlass ? 19.6 : 18.4);
             // 折叠态的岛只有 16px 高，而托盘固定 18.4px：它会顶出胶囊的圆肩，看起来正像"图标加载不全"。
@@ -1152,7 +1188,8 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
                 }
             }
             if (ambientMix > .005f) {
-                renderAmbientIcon(iconX, iconY, glyphAlpha * ambientMix, iconAccentColor, now);
+                renderAmbientIcon(ambient, iconX, iconY, iconPlate, glyphAlpha * ambientMix,
+                        iconAccentColor, now);
             }
         }
         api.getGLStateManager().popMatrix();
@@ -1180,7 +1217,9 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
             double valueY = baseValueY + copySlide;
 
             if (noticeMode) {
-                double availableWidth = Math.max(28.0, textRight - textLeft);
+                // 可用宽度必须严格跟随本帧动画出来的 width：这里原来有一个 28 像素的下限，
+                // 于是灵动岛在展开/收起过程中比 28 像素还窄时，文案照 28 像素排版就会溢出胶囊。
+                double availableWidth = Math.max(0.0, textRight - textLeft);
                 if (staticVolumeCopy) {
                     double staticTitleY = baseTitleY;
                     double staticValueY = baseValueY;
@@ -1255,12 +1294,15 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
                 float completeAlpha = textAlpha * success;
                 String status = success > .52f ? "完成" : Math.max(0, Math.min(100,
                         (int) Math.round(DynamicIslandMath.clamp01(progress) * 100.0))) + "%";
-                double statusWidth = Math.max(25.0,
-                        FontManager.pf12bold.getStringWidthD(status) * layout.textScale + 10.0);
+                double totalTextWidth = Math.max(0.0, textRight - textLeft);
+                // 百分比槽与正文同样不能有固定下限：动画中途的窄胶囊里，写死的 25/28 像素
+                // 会让"加载中 / 100%"整块横着穿出灵动岛边缘。
+                double statusWidth = Math.min(totalTextWidth, Math.max(25.0,
+                        FontManager.pf12bold.getStringWidthD(status) * layout.textScale + 10.0));
                 double statusX = textRight - statusWidth;
                 double bodyRight = statusX - 5.0;
                 double bodyCenter = (textLeft + bodyRight) * .5;
-                double bodyWidth = Math.max(28.0, bodyRight - textLeft);
+                double bodyWidth = Math.max(0.0, bodyRight - textLeft);
 
                 drawCenteredIslandText(FontManager.pf14bold, layout.title, bodyCenter, titleY,
                         bodyWidth, layout.textScale, hexColor(1f, 1f, 1f, loadingAlpha));
@@ -1332,14 +1374,18 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
     private void drawCenteredIslandText(CFontRenderer font, String text, double centerX, double y,
                                          double maxWidth, double textScale, int color) {
         if (font == null || text == null || text.isEmpty()) return;
+        // 宽度不足就整段不画。原来这里对可用宽度取 max(18, ...)：收起动画的最后几帧里胶囊只有
+        // 十几像素宽，按 18 像素裁剪出来的文字必然越过圆角边缘，看起来就是"文字溢出"。
+        if (maxWidth <= 1.0) return;
         double safeScale = DynamicIslandMath.clamp(textScale, MIN_AUTO_TEXT_SCALE, MAX_TEXT_SCALE);
-        String trimmed = trimIslandText(font, text, Math.max(18.0, maxWidth / safeScale));
+        String trimmed = trimIslandText(font, text, maxWidth / safeScale);
         if (trimmed.isEmpty()) return;
         double textWidth = font.getStringWidthD(trimmed) * safeScale;
         font.drawString(trimmed, centerX - textWidth * .5, y, safeScale, color);
     }
 
     private String trimIslandText(CFontRenderer font, String text, double maxRawWidth) {
+        if (maxRawWidth <= 0.0) return "";
         if (font.getStringWidthD(text) <= maxRawWidth) return text;
         final String ellipsis = "...";
         if (font.getStringWidthD(ellipsis) > maxRawWidth) return "";
@@ -1376,6 +1422,8 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
     private static final double AMBIENT_ICON_GAP = 3.2;
     private static final double AMBIENT_UNIT_GAP = 2.2;
     private static final double AMBIENT_CHIP_SPACING = 11.0;
+    /** 常驻行右侧保留的安全边距，和文本区右边距同源，保证行尾不会压到圆角上。 */
+    private static final double AMBIENT_RIGHT_PADDING = 9.0;
 
     /** 未缩放的常驻内容总宽。缩放由调用方乘上去，便于先量宽再决定字号。 */
     private double measureAmbientRow(IslandAmbientStatus.Snapshot ambient) {
@@ -1389,7 +1437,9 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
     }
 
     private double measureAmbientChip(IslandAmbientStatus.Chip chip) {
-        double width = AMBIENT_ICON_WIDTH + AMBIENT_ICON_GAP
+        // 正在播放页的条目不画小图标（左侧封面已经是它的图标），因此也不预留图标位，
+        // 否则歌名会整体右移一段，看起来像没对齐。
+        double width = (chip.showIcon ? AMBIENT_ICON_WIDTH + AMBIENT_ICON_GAP : 0.0)
                 + FontManager.pf14bold.getStringWidthD(chip.widthTemplate);
         if (!chip.unit.isEmpty()) {
             width += AMBIENT_UNIT_GAP + FontManager.pf12.getStringWidthD(chip.unit);
@@ -1402,10 +1452,17 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
                                 double width, double height, DynamicIslandStyle style,
                                 float alpha, double scale, int accentColor) {
         if (ambient == null || ambient.isEmpty()) return;
-        double rowWidth = measureAmbientRow(ambient) * scale;
         double centerY = y + height * .5;
         double gutter = style == DynamicIslandStyle.SYSTEM_CARD ? 40.0
                 : (style == DynamicIslandStyle.MUSIC_FOCUS ? 50.0 : 34.0);
+        // 常驻行同样必须跟着本帧的 width 收缩。展开/收起动画中途 width 远小于目标宽度，
+        // 而行宽是按目标宽度算好的，不做这一步就会整行横着穿出胶囊右侧。
+        double available = width - gutter - AMBIENT_RIGHT_PADDING;
+        double rawRowWidth = measureAmbientRow(ambient);
+        if (rawRowWidth <= 0.0 || available <= 1.0) return;
+        scale = Math.min(scale, available / rawRowWidth);
+        if (scale <= .04) return;
+        double rowWidth = rawRowWidth * scale;
         double left = Math.max(x + gutter, x + width * .5 - rowWidth * .5);
         double cursor = left;
         for (int index = 0; index < ambient.chips.length; index++) {
@@ -1421,9 +1478,11 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
     /** 画一个条目并返回它实际占掉的宽度，让调用方不必重复一遍宽度公式。 */
     private double drawAmbientChip(IslandAmbientStatus.Chip chip, double left, double centerY,
                                    float alpha, double scale, int accentColor) {
-        drawAmbientChipIcon(chip.kind, left + AMBIENT_ICON_WIDTH * .5 * scale, centerY,
-                alpha, accentColor, scale);
-        double cursor = left + (AMBIENT_ICON_WIDTH + AMBIENT_ICON_GAP) * scale;
+        if (chip.showIcon) {
+            drawAmbientChipIcon(chip.kind, left + AMBIENT_ICON_WIDTH * .5 * scale, centerY,
+                    alpha, accentColor, scale);
+        }
+        double cursor = left + (chip.showIcon ? (AMBIENT_ICON_WIDTH + AMBIENT_ICON_GAP) * scale : 0.0);
         double slot = FontManager.pf14bold.getStringWidthD(chip.widthTemplate) * scale;
         double valueWidth = FontManager.pf14bold.getStringWidthD(chip.value) * scale;
         // 数值在预留槽内居中：位数变化只影响槽内位置，不影响后面条目的起点。
@@ -1449,60 +1508,142 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         return hexColor(.96f, .97f, 1f, alpha);
     }
 
-    /** 条目图标全部用圆角矩形拼，和岛内其它笔触共用同一套 GL 状态。 */
+    /**
+     * 条目小图标改用 island-status-icons 字体：帧率=心跳(U+E904)、延迟=链条(U+E903)、时间=时钟(U+E901)。
+     *
+     * <p>原来这三枚是用圆角矩形手工拼的。在 9 像素见方、还要再乘常驻缩放的尺寸下，手绘笔画的
+     * 粗细和间距都落不到整数像素上，看起来发糊也认不出形状；字形是按字号栅格化过的，同样尺寸下
+     * 边缘干净得多。</p>
+     */
     private void drawAmbientChipIcon(IslandAmbientStatus.Kind kind, double centerX, double centerY,
                                      float alpha, int accentColor, double scale) {
         if (alpha <= .01f) return;
-        int tint = RenderSystem.reAlpha(accentColor, alpha * .96f);
-        int soft = hexColor(.78f, .83f, .92f, alpha * .88f);
-        if (kind == IslandAmbientStatus.Kind.FPS) {
-            // 递增柱状图 = 帧率。
-            roundedRect(centerX - 3.7 * scale, centerY + .6 * scale, 1.8 * scale, 2.9 * scale,
-                    .9 * scale, soft);
-            roundedRect(centerX - 1.1 * scale, centerY - 1.3 * scale, 1.8 * scale, 4.8 * scale,
-                    .9 * scale, tint);
-            roundedRect(centerX + 1.5 * scale, centerY - 3.3 * scale, 1.8 * scale, 6.8 * scale,
-                    .9 * scale, tint);
+        String glyph = kind == IslandAmbientStatus.Kind.FPS ? IslandStatusIcons.PULSE
+                : (kind == IslandAmbientStatus.Kind.PING ? IslandStatusIcons.LINK
+                : IslandStatusIcons.CLOCK);
+        int color = kind == IslandAmbientStatus.Kind.CLOCK
+                ? hexColor(.86f, .90f, .98f, alpha * .94f)
+                : RenderSystem.reAlpha(accentColor, alpha * .98f);
+        drawAmbientGlyph(glyph, centerX, centerY, AMBIENT_ICON_WIDTH * scale, color);
+    }
+
+    /** 把一枚图标字形等比缩放到目标边长并居中绘制。 */
+    private void drawAmbientGlyph(String glyph, double centerX, double centerY, double targetSize,
+                                  int color) {
+        CFontRenderer font = FontManager.islandIcon12;
+        if (font == null || glyph == null || glyph.isEmpty() || targetSize <= .5) return;
+        double rawWidth = font.getStringWidthD(glyph);
+        double rawHeight = Math.max(1.0, font.getFontHeight());
+        double glyphScale = targetSize / Math.max(rawWidth, rawHeight);
+        if (glyphScale <= .02) return;
+        font.drawString(glyph, centerX - rawWidth * glyphScale * .5,
+                centerY - rawHeight * glyphScale * .5, glyphScale, color);
+    }
+
+    /** 跑步精灵条资源：14 帧竖排，每格 24×24，白色字形 + alpha 遮罩，可整体染色。 */
+    private static final Location RUNNING_SPRITE =
+            Location.of("/muonium/textures/player/icons/running-strip.png");
+    private static final int RUNNING_SPRITE_FRAMES = 14;
+    private static final int RUNNING_SPRITE_CELL = 24;
+    /** 每帧停留时长：源 GIF 是 28 帧 ≈ 43ms/帧，抽掉一半后每帧约 87ms，一个跑步循环 1.2 秒。 */
+    private static final long RUNNING_SPRITE_FRAME_MILLIS = 87L;
+
+    /**
+     * 常驻态的左侧标记。三种形态：
+     * <ul>
+     *   <li>正在播放页 → 当前歌曲封面（有动态封面时优先用它）；</li>
+     *   <li>状态页 + 玩家在移动 → 跑步精灵动画；</li>
+     *   <li>状态页 + 玩家静止 → 心跳字形（U+E904）。</li>
+     * </ul>
+     * 刻意不复用加载转子——常驻并不代表有任务在跑，用转子会误导成"正在加载"。
+     */
+    private void renderAmbientIcon(IslandAmbientStatus.Snapshot ambient, double centerX, double centerY,
+                                   double plateSize, float alpha, int accentColor, long now) {
+        if (alpha <= .01f) return;
+        double glyphSize = Math.max(6.0, plateSize * .68);
+        if (ambient != null && ambient.isNowPlaying() && drawAmbientArtwork(centerX, centerY,
+                Math.max(8.0, plateSize * .82), alpha)) {
             return;
         }
-        if (kind == IslandAmbientStatus.Kind.PING) {
-            // 由宽到窄的三段信号 = 延迟。
-            roundedRect(centerX - 3.9 * scale, centerY - 3.5 * scale, 7.8 * scale, 1.35 * scale,
-                    .67 * scale, soft);
-            roundedRect(centerX - 2.5 * scale, centerY - .9 * scale, 5.0 * scale, 1.35 * scale,
-                    .67 * scale, tint);
-            roundedRect(centerX - .95 * scale, centerY + 1.7 * scale, 1.9 * scale, 1.9 * scale,
-                    .95 * scale, tint);
+        if (ambient != null && ambient.moving && drawRunningSprite(centerX, centerY, glyphSize * 1.12,
+                alpha, hexColor(.96f, .97f, 1f, alpha), now)) {
             return;
         }
-        // 表圈 + 时针分针 = 系统时间。
-        double radius = 4.1 * scale;
-        roundedOutline(centerX - radius, centerY - radius, radius * 2.0, radius * 2.0, radius,
-                Math.max(.55, .95 * scale),
-                new Color(255, 255, 255, DynamicIslandMath.clamp255(alpha * 190f)));
-        roundedRect(centerX - .58 * scale, centerY - 2.5 * scale, 1.16 * scale, 3.0 * scale,
-                .58 * scale, tint);
-        roundedRect(centerX - .58 * scale, centerY - .58 * scale, 2.8 * scale, 1.16 * scale,
-                .58 * scale, soft);
+        drawAmbientGlyph(IslandStatusIcons.PULSE, centerX, centerY, glyphSize,
+                RenderSystem.reAlpha(DynamicIslandMath.brightenAccent(accentColor, .18f), alpha));
     }
 
     /**
-     * 常驻态的左侧标记：一条心跳折线加一个来回扫过的亮点，表示"这些数字是活的"。
-     * 刻意不复用加载转子——常驻并不代表有任务在跑，用转子会误导。
+     * 画当前歌曲封面。动态封面就绪时 {@code preferredCoverLocation} 会返回抽帧纹理，
+     * 于是常驻岛上的封面和桌面歌曲信息、全屏歌词页用的是同一张。
+     *
+     * @return 是否真的画出来了；没有歌曲或纹理还没加载好时返回 false，调用方退回字形图标
      */
-    private void renderAmbientIcon(double centerX, double centerY, float alpha, int accentColor, long now) {
-        if (alpha <= .01f) return;
-        int foreground = hexColor(.92f, .94f, .98f, alpha);
-        roundedRect(centerX - 6.4, centerY - .58, 3.3, 1.16, .58, foreground);
-        roundedRect(centerX + 3.1, centerY - .58, 3.3, 1.16, .58, foreground);
-        drawRotatedPill(centerX - 2.1, centerY - 1.7, 4.4, 1.2, -62f,
-                RenderSystem.reAlpha(accentColor, alpha));
-        drawRotatedPill(centerX + .8, centerY + 1.5, 4.8, 1.2, 60f,
-                RenderSystem.reAlpha(accentColor, alpha));
-        double sweep = (now % 1100L) / 1100.0;
-        double dotSize = 1.5 + .55 * Math.sin(sweep * Math.PI);
-        roundedRect(centerX - 6.4 + sweep * 12.8 - dotSize * .5, centerY - 4.6 - dotSize * .5,
-                dotSize, dotSize, dotSize * .5, hexColor(1f, 1f, 1f, alpha * .90f));
+    private boolean drawAmbientArtwork(double centerX, double centerY, double size, float alpha) {
+        try {
+            Music music = CloudMusic.currentlyPlaying;
+            if (music == null || size <= 2.0) return false;
+            Location cover = CloudMusic.preferredCoverLocation(music, music.getSmallCoverLocation());
+            ITextureObject texture = TextureManager.getInstance().getTexture(cover);
+            if (texture == null) {
+                // 小封面还没下载好时退回大封面；两张都没有就交给调用方画字形。
+                texture = TextureManager.getInstance().getTexture(music.getCoverLocation());
+            }
+            if (texture == null) return false;
+            api.getGLStateManager().bindTexture(texture.getGlTextureId());
+            texture.linearFilter();
+            roundedRectTextured(centerX - size * .5, centerY - size * .5, size, size,
+                    Math.min(5.0, size * .28), alpha);
+            api.getGLStateManager().bindTexture(0);
+            GL11.glColor4f(1f, 1f, 1f, 1f);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * 画跑步精灵动画的当前帧。
+     *
+     * <p>自己写四边形而不是用 {@code Image.draw}：需要"四边形尺寸"和"采样区域"解耦
+     * （从 24×336 的竖排里只取一格），而现有助手把这两者绑在一起。线性过滤 + 半像素内缩
+     * 保证缩到 10 像素左右时不会串到相邻帧。</p>
+     *
+     * @return 纹理可用时返回 true
+     */
+    private boolean drawRunningSprite(double centerX, double centerY, double size, float alpha,
+                                      int color, long now) {
+        if (size <= 2.0 || alpha <= .01f) return false;
+        ITextureObject texture = TextureManager.getInstance().getTexture(RUNNING_SPRITE);
+        if (texture == null) {
+            // 首次使用时按需加载；这一帧先交给调用方兜底画字形，下一帧就能用上。
+            TextureManager.getInstance().loadTexture(RUNNING_SPRITE, new DynamicTexture(RUNNING_SPRITE));
+            return false;
+        }
+        int frame = (int) ((now / RUNNING_SPRITE_FRAME_MILLIS) % RUNNING_SPRITE_FRAMES);
+        double sheetHeight = (double) RUNNING_SPRITE_CELL * RUNNING_SPRITE_FRAMES;
+        // 上下各内缩半个纹素：相邻帧在线性过滤下会互相渗色，缩小显示时尤其明显。
+        double v0 = (frame * (double) RUNNING_SPRITE_CELL + .5) / sheetHeight;
+        double v1 = ((frame + 1) * (double) RUNNING_SPRITE_CELL - .5) / sheetHeight;
+        api.getGLStateManager().enableTexture2D();
+        api.getGLStateManager().bindTexture(texture.getGlTextureId());
+        RenderSystem.linearFilter();
+        RenderSystem.color(color);
+        double left = centerX - size * .5;
+        double top = centerY - size * .5;
+        GL11.glBegin(GL11.GL_QUADS);
+        GL11.glTexCoord2d(0.0, v1);
+        GL11.glVertex2d(left, top + size);
+        GL11.glTexCoord2d(1.0, v1);
+        GL11.glVertex2d(left + size, top + size);
+        GL11.glTexCoord2d(1.0, v0);
+        GL11.glVertex2d(left + size, top);
+        GL11.glTexCoord2d(0.0, v0);
+        GL11.glVertex2d(left, top);
+        GL11.glEnd();
+        api.getGLStateManager().bindTexture(0);
+        GL11.glColor4f(1f, 1f, 1f, 1f);
+        return true;
     }
 
     private void renderNoticeIcon(IslandNoticeType type, double centerX, double centerY,
@@ -1514,23 +1655,27 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
             renderSpinner(centerX, centerY, alpha, accentColor, now, false);
             return;
         }
+        // 一切"成功"共用同一枚对勾（U+E902）：原来的两笔手绘勾在小尺寸下笔画粗细不均，
+        // 而且和"连接成功"的链条图形太像，用户分不出是哪一类完成了。
         if (type == IslandNoticeType.REFRESH_SUCCESS
                 || type == IslandNoticeType.PLAYLIST_TRACK_ADD_SUCCESS
                 || type == IslandNoticeType.PLAYLIST_TRACK_ALREADY_EXISTS
-                || type == IslandNoticeType.TRANSCODE_SUCCESS || type == IslandNoticeType.GD_SOURCE_HEALTHY) {
-            drawRotatedPill(centerX - 1.8, centerY + .8, 3.8, 1.25, 43f,
-                    hexColor(.70f, 1f, .77f, alpha));
-            drawRotatedPill(centerX + 1.6, centerY - .4, 6.2, 1.25, -47f,
-                    hexColor(.70f, 1f, .77f, alpha));
-            return;
-        }
-        if (type == IslandNoticeType.GD_SOURCE_SUCCESS) {
-            drawNoticeFontelloIcon(FontelloIcons.LINK, centerX, centerY, alpha,
+                || type == IslandNoticeType.TRANSCODE_SUCCESS || type == IslandNoticeType.GD_SOURCE_HEALTHY
+                || type == IslandNoticeType.RECENT_PLAY_SUCCESS
+                || type == IslandNoticeType.LISTENING_DURATION_SUCCESS) {
+            drawIslandStatusIcon(IslandStatusIcons.SUCCESS, centerX, centerY, alpha,
                     hexColor(.70f, 1f, .77f, alpha));
             return;
         }
-        if (type == IslandNoticeType.NETWORK_SUCCESS) {
-            drawNoticeFontelloIcon(FontelloIcons.LINK, centerX, centerY, alpha,
+        // 网易云上报进行中：上传托盘（U+E807），和"成功"的对勾区分开。
+        if (type == IslandNoticeType.NETEASE_UPLOADING) {
+            drawIslandStatusIcon(IslandStatusIcons.UPLOAD, centerX, centerY, alpha,
+                    RenderSystem.reAlpha(accentColor, alpha));
+            return;
+        }
+        // 连接成功统一用链条（U+E903）。
+        if (type == IslandNoticeType.GD_SOURCE_SUCCESS || type == IslandNoticeType.NETWORK_SUCCESS) {
+            drawIslandStatusIcon(IslandStatusIcons.LINK, centerX, centerY, alpha,
                     hexColor(.70f, 1f, .77f, alpha));
             return;
         }
@@ -1625,6 +1770,19 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         // descender bounds. Metric centering keeps every left-side notice icon in
         // the middle of its circular plate.
         FontManager.fontello16.drawString(glyph, centerX - width * .5, centerY - height * .5, color);
+    }
+
+    /**
+     * 用 island-status-icons 字体画一枚居中的状态图标。
+     *
+     * <p>和 {@link #drawNoticeFontelloIcon} 分开是因为字体不同（两批 fontello 的私用区码位冲突），
+     * 居中同样按度量算而不是固定基线：这批字形的 ascender/descender 各不相同。</p>
+     */
+    private void drawIslandStatusIcon(String glyph, double centerX, double centerY, float alpha, int color) {
+        if (glyph == null || glyph.isEmpty() || alpha <= .01f || FontManager.islandIcon16 == null) return;
+        double width = FontManager.islandIcon16.getStringWidthD(glyph);
+        double height = Math.max(1.0, FontManager.islandIcon16.getFontHeight());
+        FontManager.islandIcon16.drawString(glyph, centerX - width * .5, centerY - height * .5, color);
     }
 
     private void renderSpinner(double centerX, double centerY, float alpha, int accentColor,
@@ -1781,7 +1939,7 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
     private void renderMusicFocusArtwork(double centerX, double centerY, double islandHeight, float alpha,
                                          int accentColor, int iconAccentColor, long now, boolean preview,
                                          boolean noticeMode, IslandNoticeType noticeType, float success,
-                                         float ambientMix) {
+                                         float ambientMix, IslandAmbientStatus.Snapshot ambient) {
         double tileSize = Math.min(31.0, Math.max(21.0, islandHeight - 16.0));
         double tileRadius = Math.min(8.0, tileSize * .28);
         double beat = .985 + .025 * (.5 + .5 * Math.sin((preview ? now / 8.0 : now / 290.0)));
@@ -1822,7 +1980,8 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         if (ambientMix > .005f) {
             api.getGLStateManager().pushMatrix();
             scaleAtPos(centerX, centerY, .64);
-            renderAmbientIcon(centerX, centerY, alpha * ambientMix, iconAccentColor, now);
+            renderAmbientIcon(ambient, centerX, centerY, tileSize, alpha * ambientMix,
+                    iconAccentColor, now);
             api.getGLStateManager().popMatrix();
         }
     }
@@ -1833,9 +1992,8 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         scaleAtPos(centerX, centerY, scale);
         roundedOutline(centerX - 6.2, centerY - 6.2, 12.4, 12.4, 6.2, .75,
                 new Color(91, 240, 129, DynamicIslandMath.clamp255(alpha * 220f)));
-        drawRotatedPill(centerX - 1.8, centerY + .8, 3.8, 1.25, 43f,
-                hexColor(.70f, 1f, .77f, alpha));
-        drawRotatedPill(centerX + 1.6, centerY - .4, 6.2, 1.25, -47f,
+        // 下载/播放完成也用同一枚 U+E902 对勾，和通知里的"成功"完全一致。
+        drawIslandStatusIcon(IslandStatusIcons.SUCCESS, centerX, centerY, alpha,
                 hexColor(.70f, 1f, .77f, alpha));
         api.getGLStateManager().popMatrix();
     }
@@ -1868,6 +2026,7 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         PLAYBACK_ERROR,
         NETWORK_SUCCESS,
         NETWORK_ERROR,
+        NETEASE_UPLOADING,
         RECENT_PLAY_SUCCESS,
         RECENT_PLAY_ERROR,
         LISTENING_DURATION_SUCCESS,

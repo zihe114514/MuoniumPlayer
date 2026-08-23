@@ -69,7 +69,8 @@ public class GuiHudEditor extends GuiScreen {
             HudSetting.OSD_GLOW,
             HudSetting.OSD_BLOOM,
             HudSetting.OSD_PULSE,
-            HudSetting.OSD_SMOOTHNESS
+            HudSetting.OSD_SMOOTHNESS,
+            HudSetting.OSD_DUET_SPREAD
     };
 
     private static final HudSetting[] NORMAL_SLIDERS = {
@@ -95,7 +96,8 @@ public class GuiHudEditor extends GuiScreen {
             HudSetting.DYNAMIC_ISLAND_CONTENT_SPEED,
             HudSetting.DYNAMIC_ISLAND_ENTRANCE_DURATION,
             HudSetting.DYNAMIC_ISLAND_OVERSHOOT,
-            HudSetting.DYNAMIC_ISLAND_SPINNER_SPEED
+            HudSetting.DYNAMIC_ISLAND_SPINNER_SPEED,
+            HudSetting.DYNAMIC_ISLAND_AMBIENT_ROTATE
     };
 
     private boolean draggingInfo;
@@ -455,6 +457,12 @@ public class GuiHudEditor extends GuiScreen {
                         x + 6, rowY, mouseX, mouseY);
                 rowY += COLOR_ROW_H;
                 drawToggleRow(fr, "常驻 · 时间", HudConfig.dynamicIslandAmbientClock,
+                        x + 6, rowY, mouseX, mouseY);
+                rowY += COLOR_ROW_H;
+                drawToggleRow(fr, "常驻 · 正在播放", HudConfig.dynamicIslandAmbientNowPlaying,
+                        x + 6, rowY, mouseX, mouseY);
+                rowY += COLOR_ROW_H;
+                drawToggleRow(fr, "常驻 · 轮换显示", HudConfig.dynamicIslandAmbientRotate,
                         x + 6, rowY, mouseX, mouseY);
                 rowY += COLOR_ROW_H;
                 for (HudSetting setting : ISLAND_SLIDERS) {
@@ -929,6 +937,18 @@ public class GuiHudEditor extends GuiScreen {
                 rowY += COLOR_ROW_H;
                 if (isInside(mouseX, mouseY, panelX + 6, rowY, SETTINGS_W - 12, COLOR_ROW_H)) {
                     HudConfig.dynamicIslandAmbientClock = !HudConfig.dynamicIslandAmbientClock;
+                    HudConfig.save();
+                    return;
+                }
+                rowY += COLOR_ROW_H;
+                if (isInside(mouseX, mouseY, panelX + 6, rowY, SETTINGS_W - 12, COLOR_ROW_H)) {
+                    HudConfig.dynamicIslandAmbientNowPlaying = !HudConfig.dynamicIslandAmbientNowPlaying;
+                    HudConfig.save();
+                    return;
+                }
+                rowY += COLOR_ROW_H;
+                if (isInside(mouseX, mouseY, panelX + 6, rowY, SETTINGS_W - 12, COLOR_ROW_H)) {
+                    HudConfig.dynamicIslandAmbientRotate = !HudConfig.dynamicIslandAmbientRotate;
                     HudConfig.save();
                     return;
                 }
