@@ -97,7 +97,8 @@ public class GuiHudEditor extends GuiScreen {
             HudSetting.DYNAMIC_ISLAND_ENTRANCE_DURATION,
             HudSetting.DYNAMIC_ISLAND_OVERSHOOT,
             HudSetting.DYNAMIC_ISLAND_SPINNER_SPEED,
-            HudSetting.DYNAMIC_ISLAND_AMBIENT_ROTATE
+            HudSetting.DYNAMIC_ISLAND_AMBIENT_STATUS,
+            HudSetting.DYNAMIC_ISLAND_AMBIENT_NOW_PLAYING
     };
 
     private boolean draggingInfo;
@@ -359,10 +360,37 @@ public class GuiHudEditor extends GuiScreen {
         drawExternalText(fr, "歌词", tog2X + togW + 4, barY + 8,
                 lyrics.isEnabled() ? 0xFFBFFFE0 : 0xFF8B95A5);
 
+        int[] modern = modernSwitchButton(sw, barY);
+        drawRoundedRect(modern[0], modern[1], modern[2], modern[3], 10,
+                isInside(mouseX, mouseY, modern[0], modern[1], modern[2], modern[3])
+                        ? 0xFF48617D : 0xFF303B4A);
+        drawCenteredExternalText(fr, "新界面", modern[0] + modern[2] / 2, barY + 9, 0xFFF3F6FA);
+
         String infoText = "信息栏: " + pct(HudConfig.infoX, HudConfig.infoY, HudConfig.infoScale)
                 + "  歌词: " + pct(HudConfig.lyricX, HudConfig.lyricY, HudConfig.lyricScale)
                 + "  · 拖拽移动  · 滚轮缩放  · 设置实时预览  · ESC 退出";
         drawExternalText(fr, infoText, sw / 2 - fr.getStringWidth(infoText) / 2, barY - 12, 0xFF9EAABD);
+    }
+
+    /**
+     * 底部工具栏右侧的「新界面」入口。
+     *
+     * <p>刻意放在底栏而不是顶部标题栏:标题栏只有 236px 宽,已经排了折叠与恢复默认两个按钮,
+     * 再塞一个就会压到「实时调整 · 自动保存」那行副标题上。底栏本来就有整条空白。</p>
+     */
+    private static int[] modernSwitchButton(int sw, int barY) {
+        int w = 74;
+        return new int[] { sw - 18 - w, barY + 4, w, 20 };
+    }
+
+    /** 切到现代界面,并把选择记住,下次打开直接是这一套。 */
+    private void switchToModern() {
+        if (lyricSettingsDirty) {
+            lyricSettingsDirty = false;
+        }
+        HudConfig.hudEditorModernUi = true;
+        HudConfig.save();
+        mc.displayGuiScreen(new GuiHudEditorPro());
     }
 
     private void drawRoundedRect(double x, double y, double w, double h, double radius, int color) {
@@ -1004,6 +1032,11 @@ public class GuiHudEditor extends GuiScreen {
         }
 
         int barY = height - 28;
+        int[] modern = modernSwitchButton(width, barY);
+        if (isInside(mouseX, mouseY, modern[0], modern[1], modern[2], modern[3])) {
+            switchToModern();
+            return;
+        }
         int resetW = 72;
         int resetX = width / 2 - resetW / 2;
         if (isInside(mouseX, mouseY, resetX, barY + 4, resetW, 20)) {
@@ -1131,12 +1164,9 @@ public class GuiHudEditor extends GuiScreen {
         HudConfig.save();
     }
 
-    /**
-     * 动态封面依赖外部 ffmpeg。已经探测过但没找到时把结论写在标签上,否则用户只会看到"开着却没动画"。
-     * 这里只读缓存结论,不会在渲染线程上真的去探测(那会创建子进程并卡帧)。
-     */
+    /** 委托给 {@link HudSettingsModel#animatedCoverLabel()},两套界面显示同一段文案。 */
     private static String animatedCoverLabel() {
-        return CloudMusic.animatedCoverToolingState() < 0 ? "动态封面 · 未检测到 ffmpeg" : "动态封面";
+        return HudSettingsModel.animatedCoverLabel();
     }
 
     private void setAnimatedCoverEnabled(boolean enabled) {
@@ -1145,14 +1175,9 @@ public class GuiHudEditor extends GuiScreen {
         HudConfig.save();
     }
 
-    /** 模块面板里的 {@code Animated Cover} 只是同一状态的另一处显示,改完要立刻跟上。 */
+    /** 委托给 {@link HudSettingsModel#syncAnimatedCoverModuleValue()}。 */
     private static void syncAnimatedCoverModuleValue() {
-        try {
-            MuoniumPlayerExtension.getInstance().musicInfo.animatedCover
-                    .setValue(HudConfig.animatedCoverEnabled);
-        } catch (Throwable ignored) {
-            // 值存储还没准备好时无所谓:HudConfig 才是真实来源。
-        }
+        HudSettingsModel.syncAnimatedCoverModuleValue();
     }
 
     private void beginColorEdit(EditingColor type, Color color) {
@@ -1253,50 +1278,14 @@ public class GuiHudEditor extends GuiScreen {
         lyricSettingsDirty = true;
     }
 
+    /**
+     * 滑块右侧的数值文本。
+     *
+     * <p>委托给 {@link HudSettingsModel#formatValue}:同一项在经典界面与现代界面必须显示同样的
+     * 单位与精度。原来这里自己写了一份 switch,新增滑块时只要漏改一处,那一边就会退回裸小数。</p>
+     */
     private String formatSliderValue(HudSetting setting, float value) {
-        switch (setting) {
-            case CURRENT_LINE_SCALE:
-            case NORMAL_SCALE:
-            case DYNAMIC_ISLAND_SCALE:
-            case DYNAMIC_ISLAND_TEXT_SCALE:
-                return Math.round(value * 100.0f) + "%";
-            case CURRENT_WORD_SCALE:
-            case CURRENT_GLOW:
-            case CURRENT_BLOOM:
-            case CURRENT_BREATH:
-            case OSD_GLOW:
-            case OSD_BLOOM:
-            case OSD_PULSE:
-            case OSD_SMOOTHNESS:
-            case NORMAL_OPACITY:
-            case NORMAL_GLOW:
-            case NORMAL_BLOOM:
-            case SCROLL_SMOOTHNESS:
-            case SECONDARY_OPACITY:
-                return Math.round(value * 100.0f) + "%";
-            case CURRENT_GLOW_RADIUS:
-            case DYNAMIC_ISLAND_MAX_WIDTH:
-            case DYNAMIC_ISLAND_PROGRESS_HEIGHT:
-                return String.format("%.1f px", value);
-            case DYNAMIC_ISLAND_COMPLETION_HOLD:
-            case DYNAMIC_ISLAND_QUEUE_INTERVAL:
-                return String.format("%.1f s", value);
-            case DYNAMIC_ISLAND_ENTRANCE_DURATION:
-                return Math.round(value) + " ms";
-            case DYNAMIC_ISLAND_EXPAND_SPEED:
-            case DYNAMIC_ISLAND_COLLAPSE_SPEED:
-            case DYNAMIC_ISLAND_CONTENT_SPEED:
-            case DYNAMIC_ISLAND_SPINNER_SPEED:
-            case DYNAMIC_ISLAND_OVERSHOOT:
-                return String.format("%.2f×", value);
-            case CURRENT_TRANSITION:
-            case OSD_TRANSITION:
-            case NORMAL_SPACING:
-            case EDGE_FADE:
-                return Math.round(value) + " px";
-            default:
-                return String.format("%.2f", value);
-        }
+        return HudSettingsModel.formatValue(setting, value);
     }
 
     /** 主题色块网格：每格显示预设的页面底色与强调色，点击立即切换。 */

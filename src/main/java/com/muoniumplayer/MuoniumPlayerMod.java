@@ -31,6 +31,8 @@ import com.muoniumplayer.core.rendering.animation.Interpolations;
 import com.muoniumplayer.core.rendering.rendersystem.RenderSystem;
 import com.muoniumplayer.core.screens.GuiFfmpegNotice;
 import com.muoniumplayer.core.screens.hud.GuiHudEditor;
+import com.muoniumplayer.core.screens.hud.GuiHudEditorPro;
+import com.muoniumplayer.core.settings.HudConfig;
 
 /**
  * Forge 1.8.9 Mod 入口。
@@ -171,7 +173,10 @@ public class MuoniumPlayerMod {
                 MuoniumPlayerExtension.getInstance().musicPlayerModule.setEnabled(true);
             }
             if (keyEditHud.isPressed()) {
-                mc.displayGuiScreen(new GuiHudEditor());
+                // 打开哪一套 HUD 设置界面由配置决定；两套界面里都有互相切换的按钮，
+                // 点了之后写回 HudConfig.hudEditorModernUi，所以这里读到的总是用户最后一次的选择。
+                mc.displayGuiScreen(HudConfig.hudEditorModernUi
+                        ? new GuiHudEditorPro() : new GuiHudEditor());
             }
 
             // Reuse the exact player-control path used by the previous/next buttons.
@@ -266,7 +271,8 @@ public class MuoniumPlayerMod {
         Framebuffer.updateMcFramebuffer();
         Interpolations.calcFrameDelta();
 
-        if (!(event.gui instanceof GuiHudEditor)) {
+        // 两套 HUD 设置界面都自己画灵动岛的专用预览，这里再画一次会叠成双层。
+        if (!(event.gui instanceof GuiHudEditor) && !(event.gui instanceof GuiHudEditorPro)) {
             DownloadDynamicIsland.render();
         }
     }

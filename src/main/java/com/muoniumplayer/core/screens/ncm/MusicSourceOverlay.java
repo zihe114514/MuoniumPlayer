@@ -6,6 +6,8 @@ import com.muoniumplayer.core.ncm.music.GdStudioMusicService;
 import com.muoniumplayer.core.ncm.music.CadenceMusicService;
 import com.muoniumplayer.core.ncm.music.GdStudioSourceSettings;
 import com.muoniumplayer.core.ncm.music.MusicPlatform;
+import com.muoniumplayer.core.rendering.font.CFontRenderer;
+import com.muoniumplayer.core.rendering.font.GlyphInkMetrics;
 import com.muoniumplayer.core.rendering.FontelloIcons;
 import com.muoniumplayer.core.rendering.MusicBrandIcons;
 import com.muoniumplayer.core.rendering.animation.Interpolations;
@@ -49,15 +51,17 @@ public final class MusicSourceOverlay extends NCMPanel {
         choosingGdPlatform = false;
         getChildren().clear();
 
-        Panel dialog = createDialog(452, 342);
+        Panel dialog = createDialog(452, 352);
         addTitle(dialog, "音乐来源", "官方音乐源与 GD音乐台 在线聚合源可独立切换");
 
-        addSectionLabel(dialog, "官方音乐源", 64);
-        addContentSource(dialog, MusicPlatform.NETEASE, 84);
-        addContentSource(dialog, MusicPlatform.QQ, 146);
+        // 分组标题 / 卡片的纵向节奏：标题下 20 起第一张卡，两张卡之间留 8，换分组前留 14。
+        // 原来两张官方卡之间只有 4，挨在一起像一整块；分组之间反而比卡片间距还紧。
+        addSectionLabel(dialog, "官方音乐源", 68);
+        addContentSource(dialog, MusicPlatform.NETEASE, 88);
+        addContentSource(dialog, MusicPlatform.QQ, 154);
 
-        addSectionLabel(dialog, "在线聚合源", 216);
-        addGdContentSource(dialog, 236);
+        addSectionLabel(dialog, "在线聚合源", 226);
+        addGdContentSource(dialog, 246);
 
         LabelWidget detail = new LabelWidget("GD音乐台来源由 music-api.gdstudio.xyz 提供；请按上游服务的使用要求使用。", FontManager.pf12);
         dialog.addChild(detail);
@@ -70,7 +74,7 @@ public final class MusicSourceOverlay extends NCMPanel {
         });
     }
 
-    private void addGdContentSource(Panel dialog, double y) {
+    private void addGdContentSource(Panel dialog, final double y) {
         RoundedButtonWidget card = new RoundedButtonWidget("", FontManager.pf14bold);
         dialog.addChild(card);
         card.setRadius(10);
@@ -80,29 +84,26 @@ public final class MusicSourceOverlay extends NCMPanel {
             return true;
         });
         card.setBeforeRenderCallback(() -> {
-            card.setBounds(Math.max(1, dialog.getWidth() - 32), 58);
-            card.setPosition(16, y);
-            boolean selected = isGdActive();
-            card.setColor(selected ? MusicPlatform.GD.getBrandColor()
-                    : (card.isHovering() ? NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_HOVER)
-                    : NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_BACKGROUND)));
+            card.setBounds(Math.max(1, dialog.getWidth() - CARD_INSET * 2.0), CARD_HEIGHT);
+            card.setPosition(CARD_INSET, y);
+            card.setColor(gdCardColor(card.isHovering()));
             card.setTextColor(0x00FFFFFF);
         });
 
-        LabelWidget icon = new LabelWidget(FontelloIcons.LINK, FontManager.fontello18);
+        LabelWidget icon = new LabelWidget(FontelloIcons.LINK, FontManager.fontello40);
         dialog.addChild(icon);
         icon.setClickable(false);
         icon.setBeforeRenderCallback(() -> {
-            icon.setColor(0xFFFFFF);
-            icon.setPosition(31, y + 18);
+            icon.setColor(gdTextColor());
+            centerIcon(icon, FontManager.fontello40, FontelloIcons.LINK.charAt(0), y);
         });
 
         LabelWidget title = new LabelWidget("GD音乐台 · 在线聚合", FontManager.pf14bold);
         dialog.addChild(title);
         title.setClickable(false);
         title.setBeforeRenderCallback(() -> {
-            title.setColor(isGdActive() ? 0xFFFFFF : NCMScreen.getColor(NCMScreen.ColorType.PRIMARY_TEXT));
-            title.setPosition(60, y + 13);
+            title.setColor(gdTextColor());
+            title.setPosition(TEXT_LEFT, titleTop(y));
         });
 
         LabelWidget subtitle = new LabelWidget(this::buildGdSummary, FontManager.pf12);
@@ -110,25 +111,34 @@ public final class MusicSourceOverlay extends NCMPanel {
         subtitle.setClickable(false);
         subtitle.setBeforeRenderCallback(() -> {
             subtitle.setColor(isGdActive() ? 0xE5FFFFFF : NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT));
-            subtitle.setMaxWidth(Math.max(1, dialog.getWidth() - 174));
+            // 副标题要在右侧胶囊之前收住，否则长的额度文案会压到胶囊底下。
+            subtitle.setMaxWidth(Math.max(1, dialog.getWidth() - TEXT_LEFT
+                    - CARD_INSET - CHIP_INSET - CHIP_WIDTH - 8.0));
             subtitle.setWidthLimitType(LabelWidget.WidthLimitType.TRIM_TO_WIDTH);
-            subtitle.setPosition(60, y + 34);
+            subtitle.setPosition(TEXT_LEFT, subtitleTop(y));
         });
 
         RoundedButtonWidget manage = new RoundedButtonWidget("选择平台", FontManager.pf12bold);
         dialog.addChild(manage);
-        manage.setRadius(7);
+        manage.setRadius(CHIP_HEIGHT * .5);
         manage.setOnClickCallback((x, yy, button) -> {
             if (button != 0) return false;
             showGdPlatforms();
             return true;
         });
         manage.setBeforeRenderCallback(() -> {
-            manage.setBounds(96, 28);
-            manage.setPosition(Math.max(16, dialog.getWidth() - 112), y + 15);
-            manage.setColor(manage.isHovering() ? NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_HOVER)
-                    : NCMScreen.getColor(NCMScreen.ColorType.INPUT_BACKGROUND));
-            manage.setTextColor(isGdActive() ? 0xFFFFFF : NCMScreen.getColor(NCMScreen.ColorType.PRIMARY_TEXT));
+            manage.setBounds(CHIP_WIDTH, CHIP_HEIGHT);
+            // 右边缘留出 CHIP_INSET 的内边距。原来它的右边缘正好和卡片右边缘重合，胶囊贴在圆角上，
+            // 看起来像是从卡片里挤出来的。
+            manage.setPosition(Math.max(CARD_INSET,
+                            dialog.getWidth() - CARD_INSET - CHIP_INSET - CHIP_WIDTH),
+                    y + (CARD_HEIGHT - CHIP_HEIGHT) * .5);
+            int text = gdTextColor();
+            // 胶囊颜色 = 卡片当前颜色朝「这张卡片上的文字色」推一小步。原来它固定用输入框底色，
+            // 卡片选中变成品牌色之后就成了一块突兀的深色方块。按卡片颜色派生之后，深色主题上是稍亮
+            // 一点、浅色主题上是稍暗一点的一小片，两种主题、选中与未选中都自然。
+            manage.setColor(mix(gdCardColor(card.isHovering()), text, manage.isHovering() ? .24 : .11));
+            manage.setTextColor(text);
         });
     }
 
@@ -251,7 +261,7 @@ public final class MusicSourceOverlay extends NCMPanel {
                 ? "当前内容源：" + label + budget : "已选用：" + label + " · 点击切换";
     }
 
-    private void addContentSource(Panel dialog, MusicPlatform platform, double y) {
+    private void addContentSource(Panel dialog, final MusicPlatform platform, final double y) {
         RoundedButtonWidget card = new RoundedButtonWidget("", FontManager.pf14bold);
         dialog.addChild(card);
         card.setRadius(10);
@@ -268,41 +278,147 @@ public final class MusicSourceOverlay extends NCMPanel {
             return true;
         });
         card.setBeforeRenderCallback(() -> {
-            card.setBounds(Math.max(1, dialog.getWidth() - 32), 58);
-            card.setPosition(16, y);
-            boolean selected = CadenceMusicService.getCurrentPlatform() == platform;
-            card.setColor(selected ? platform.getBrandColor()
-                    : (card.isHovering() ? NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_HOVER)
-                    : NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_BACKGROUND)));
+            card.setBounds(Math.max(1, dialog.getWidth() - CARD_INSET * 2.0), CARD_HEIGHT);
+            card.setPosition(CARD_INSET, y);
+            card.setColor(officialCardColor(platform, card.isHovering()));
             card.setTextColor(0x00FFFFFF);
         });
 
-        LabelWidget icon = new LabelWidget(platform == MusicPlatform.QQ ? MusicBrandIcons.QQ_MUSIC : MusicBrandIcons.NETEASE_CLOUD_MUSIC,
-                FontManager.musicBrand18);
+        // 品牌字形必须配对到自己那份字体：music-brand-icons 里没有 U+E888（QQ 音乐的标记），
+        // 原来两个平台都用 musicBrand18 去取，QQ 那一枚落到兜底字体上、画出来是空白。
+        final boolean qq = platform == MusicPlatform.QQ;
+        final String brandGlyph = qq ? MusicBrandIcons.QQ_MUSIC : MusicBrandIcons.NETEASE_CLOUD_MUSIC;
+        LabelWidget icon = new LabelWidget(brandGlyph,
+                qq ? FontManager.qqMusicIcon68 : FontManager.musicBrand52);
         dialog.addChild(icon);
         icon.setClickable(false);
         icon.setBeforeRenderCallback(() -> {
-            icon.setColor(0xFFFFFF);
-            icon.setPosition(31, y + 18);
+            icon.setColor(officialTextColor(platform));
+            centerIcon(icon, qq ? FontManager.qqMusicIcon68 : FontManager.musicBrand52, brandGlyph.charAt(0), y);
         });
 
         LabelWidget title = new LabelWidget(platform.getDisplayName(), FontManager.pf14bold);
         dialog.addChild(title);
         title.setClickable(false);
         title.setBeforeRenderCallback(() -> {
-            title.setColor(CadenceMusicService.getCurrentPlatform() == platform ? 0xFFFFFF : NCMScreen.getColor(NCMScreen.ColorType.PRIMARY_TEXT));
-            title.setPosition(60, y + 13);
+            title.setColor(officialTextColor(platform));
+            title.setPosition(TEXT_LEFT, titleTop(y));
         });
 
-        LabelWidget subtitle = new LabelWidget(platform == MusicPlatform.QQ
+        LabelWidget subtitle = new LabelWidget(qq
                 ? "完整内容来源 · 搜索、歌单与 QQ 账号" : "完整内容来源 · 搜索、歌单与网易云账号", FontManager.pf12);
         dialog.addChild(subtitle);
         subtitle.setClickable(false);
         subtitle.setBeforeRenderCallback(() -> {
             subtitle.setColor(CadenceMusicService.getCurrentPlatform() == platform ? 0xE5FFFFFF
                     : NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT));
-            subtitle.setPosition(60, y + 34);
+            subtitle.setMaxWidth(Math.max(1, dialog.getWidth() - TEXT_LEFT - CARD_INSET - CHIP_INSET));
+            subtitle.setWidthLimitType(LabelWidget.WidthLimitType.TRIM_TO_WIDTH);
+            subtitle.setPosition(TEXT_LEFT, subtitleTop(y));
         });
+    }
+
+    // ==================== 来源卡片的共用尺寸与配色 ====================
+
+    /** 卡片高度。左侧图标、文字块与右侧胶囊都按它做垂直居中。 */
+    private static final double CARD_HEIGHT = 58.0;
+    /** 卡片到对话框左右边缘的留白。 */
+    private static final double CARD_INSET = 16.0;
+    /** 左侧品牌图标的水平中心（卡片左边缘 + 14 的内边距 + 13 的图标半宽）。 */
+    private static final double ICON_CENTER_X = CARD_INSET + 27.0;
+    /** 标题与副标题的左边缘。 */
+    private static final double TEXT_LEFT = 68.0;
+    /** 标题与副标题之间的行距。 */
+    private static final double TEXT_GAP = 7.0;
+    /** 右侧「选择平台」胶囊的宽高，以及它到卡片右边缘的内边距。 */
+    private static final double CHIP_WIDTH = 84.0;
+    private static final double CHIP_HEIGHT = 26.0;
+    private static final double CHIP_INSET = 12.0;
+
+    private static double lineHeight(CFontRenderer font, double fallback) {
+        return font == null ? fallback : font.getHeight();
+    }
+
+    /**
+     * 标题的顶边。
+     *
+     * <p>把「标题 + 行距 + 副标题」当成一整块在卡片里垂直居中，而不是写死两个偏移量：原来标题固定
+     * 在 y+13、副标题在 y+34，在 58 高的卡片里上边距 13、下边距 19，整块明显偏上。按字体自身的行高
+     * 算还有个好处：以后换字号不用重新调这两个数。</p>
+     */
+    private static double titleTop(double cardY) {
+        double block = lineHeight(FontManager.pf14bold, 6.0) + TEXT_GAP + lineHeight(FontManager.pf12, 5.0);
+        return cardY + (CARD_HEIGHT - block) * .5;
+    }
+
+    private static double subtitleTop(double cardY) {
+        return titleTop(cardY) + lineHeight(FontManager.pf14bold, 6.0) + TEXT_GAP;
+    }
+
+    /**
+     * 把一枚单字形图标摆到图标位的视觉正中心。
+     *
+     * <p>不能用 {@code icon.getWidth()/getHeight()}：其一，LabelWidget 的尺寸是在 {@code onRender}
+     * 的末尾按文本回填的，而这里是 {@code beforeRender}，读到的是上一帧的值（首帧还是 0），会闪一下；
+     * 其二，那个尺寸是字体的行盒，而图标字形占满 em 方格的比例各不相同（实测 U+E888 只有 0.53、
+     * U+E800 有 0.91），行盒高度还受中文回退字体的行高牵连，按它居中三枚图标不会对齐。这里改用
+     * {@link GlyphInkMetrics} 量出的墨迹盒。</p>
+     */
+    private static void centerIcon(LabelWidget icon, CFontRenderer font, char glyph, double cardY) {
+        double centerY = cardY + CARD_HEIGHT * .5;
+        GlyphInkMetrics ink = GlyphInkMetrics.of(font, glyph);
+        if (ink == null) {
+            // 量不出来（字体没加载好 / 字形是空的）就退回行盒居中，至少不会画到卡片外面。
+            icon.setPosition(ICON_CENTER_X - icon.getWidth() * .5, centerY - icon.getHeight() * .5);
+            return;
+        }
+        icon.setPosition(ink.alignCenterX(ICON_CENTER_X), ink.alignCenterY(centerY));
+    }
+
+    /**
+     * 在两个 {@code 0xRRGGBB} 之间线性插值。
+     *
+     * <p>只混 RGB：{@code AbstractWidget.setColor(int)} 走的是 {@code new Color(int)}，高位的 alpha
+     * 会被丢掉（透明度由组件自己的 alpha 决定），所以传半透明色是没用的。要让一个控件"淡一点"，
+     * 只能把它的颜色往背景或前景色混。</p>
+     */
+    private static int mix(int from, int to, double amount) {
+        double t = Math.max(0.0, Math.min(1.0, amount));
+        int r = channel((from >> 16) & 0xFF, (to >> 16) & 0xFF, t);
+        int g = channel((from >> 8) & 0xFF, (to >> 8) & 0xFF, t);
+        int b = channel(from & 0xFF, to & 0xFF, t);
+        return (r << 16) | (g << 8) | b;
+    }
+
+    private static int channel(int from, int to, double t) {
+        return Math.max(0, Math.min(255, (int) Math.round(from + (to - from) * t)));
+    }
+
+    private int officialCardColor(MusicPlatform platform, boolean hovering) {
+        if (CadenceMusicService.getCurrentPlatform() == platform) return platform.getBrandColor();
+        return hovering ? NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_HOVER)
+                : NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_BACKGROUND);
+    }
+
+    /**
+     * 卡片上的前景色。
+     *
+     * <p>未选中时用主题的主要文字色而不是写死的白色：浅色主题下卡片底色是浅的，白色图标和标题会
+     * 直接看不见。</p>
+     */
+    private int officialTextColor(MusicPlatform platform) {
+        return CadenceMusicService.getCurrentPlatform() == platform
+                ? 0xFFFFFF : NCMScreen.getColor(NCMScreen.ColorType.PRIMARY_TEXT);
+    }
+
+    private int gdCardColor(boolean hovering) {
+        if (isGdActive()) return MusicPlatform.GD.getBrandColor();
+        return hovering ? NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_HOVER)
+                : NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_BACKGROUND);
+    }
+
+    private int gdTextColor() {
+        return isGdActive() ? 0xFFFFFF : NCMScreen.getColor(NCMScreen.ColorType.PRIMARY_TEXT);
     }
 
     private void addSectionLabel(Panel dialog, String text, double y) {

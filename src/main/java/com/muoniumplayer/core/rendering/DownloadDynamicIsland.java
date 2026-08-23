@@ -1521,9 +1521,12 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         String glyph = kind == IslandAmbientStatus.Kind.FPS ? IslandStatusIcons.PULSE
                 : (kind == IslandAmbientStatus.Kind.PING ? IslandStatusIcons.LINK
                 : IslandStatusIcons.CLOCK);
-        int color = kind == IslandAmbientStatus.Kind.CLOCK
-                ? hexColor(.86f, .90f, .98f, alpha * .94f)
-                : RenderSystem.reAlpha(accentColor, alpha * .98f);
+        // 延迟(U+E903)与时间(U+E901)刻意不跟主题强调色走：这两枚是读数，需要在任何强调色下都
+        // 保持同样的可读性；帧率(U+E904)保留强调色，让常驻行仍然有一处跟随主题的着色点。
+        // 另外强调色本身可能就是低对比度的深色（部分浅色主题的强调色偏暗），染到深色胶囊上会糊成一团。
+        int color = kind == IslandAmbientStatus.Kind.FPS
+                ? RenderSystem.reAlpha(accentColor, alpha * .98f)
+                : hexColor(.86f, .90f, .98f, alpha * .94f);
         drawAmbientGlyph(glyph, centerX, centerY, AMBIENT_ICON_WIDTH * scale, color);
     }
 

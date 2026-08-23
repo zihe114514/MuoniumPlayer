@@ -192,16 +192,25 @@ final class IslandAmbientStatus {
      * 反复打断，用累计计时会在每次恢复时错一段相位。按绝对时间分片则无论中间中断多久，
      * 回来时都落在正确的节拍上。</p>
      *
-     * @param intervalMillis 轮换间隔，非正数时按 6 秒兜底
+     * <p>两页的停留时长是分开配置的，所以不能再用「按固定间隔取整判奇偶」那种写法。改成把
+     * 「状态时长 + 歌曲时长」当作一个周期，用绝对时间对周期取模得到相位，相位落在前半段显示状态页、
+     * 后半段显示歌曲页。这样既保留了「纯 {@code now} 函数」的性质（中断多久回来都落在正确节拍上），
+     * 又让两段可以不等长。</p>
+     *
+     * @param statusMillis     状态页停留时长，非正数时按 5 秒兜底
+     * @param nowPlayingMillis 正在播放页停留时长，非正数时按 8 秒兜底
      */
     static Page pageFor(long now, boolean statusAvailable, boolean nowPlayingAvailable,
-                        boolean rotate, double intervalMillis) {
+                        boolean rotate, double statusMillis, double nowPlayingMillis) {
         if (!nowPlayingAvailable) return Page.STATUS;
         if (!statusAvailable) return Page.NOW_PLAYING;
         if (!rotate) return Page.STATUS;
-        double interval = intervalMillis > 0.0 ? intervalMillis : 6000.0;
-        long slot = (long) Math.floor(now / interval);
-        return (slot & 1L) == 0L ? Page.STATUS : Page.NOW_PLAYING;
+        // 取模用 long：epoch 毫秒到 2026 年已经是 1.7e12，用 double 做除法再取整虽然还在 53 位精度内，
+        // 但整数取模更直白，也不会因为间隔是小数而在边界上抖动。
+        long status = Math.max(1L, Math.round(statusMillis > 0.0 ? statusMillis : 5000.0));
+        long playing = Math.max(1L, Math.round(nowPlayingMillis > 0.0 ? nowPlayingMillis : 8000.0));
+        long phase = Math.floorMod(now, status + playing);
+        return phase < status ? Page.STATUS : Page.NOW_PLAYING;
     }
 
     /** 玩家是否在移动。带滞回：停下后 {@link #MOVING_HOLD_MILLIS} 内仍算移动。 */
@@ -229,7 +238,8 @@ final class IslandAmbientStatus {
                         || HudConfig.dynamicIslandAmbientClock,
                 HudConfig.dynamicIslandAmbientNowPlaying && hasCurrentTrack(),
                 HudConfig.dynamicIslandAmbientRotate,
-                HudConfig.dynamicIslandAmbientRotateSeconds * 1000.0);
+                HudConfig.dynamicIslandAmbientStatusSeconds * 1000.0,
+                HudConfig.dynamicIslandAmbientNowPlayingSeconds * 1000.0);
         if (page == Page.NOW_PLAYING) {
             Snapshot nowPlaying = captureNowPlaying(now, moving);
             // 歌曲信息临时取不到（切歌瞬间）时退回状态页，而不是显示一张空卡片。

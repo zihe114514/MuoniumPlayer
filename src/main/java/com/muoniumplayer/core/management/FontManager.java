@@ -38,8 +38,23 @@ public class FontManager extends AbstractManager {
     public static CFontRenderer music14, music18, music40;
     /** Fontello icon font bundled with the player UI. */
     public static CFontRenderer fontello14, fontello16, fontello18, fontello22;
+    /** 与 {@link #musicBrand52} 同一档视觉尺寸的 fontello 图标（在线聚合源卡片上的链条）。 */
+    public static CFontRenderer fontello40;
     /** Provider-brand Fontello glyphs use a separate font to avoid private-use code collisions. */
     public static CFontRenderer musicBrand16, musicBrand18;
+    /**
+     * 音乐来源二级菜单卡片上的品牌标记。
+     *
+     * <p>这一档的字号是按「墨迹高度等于 18 逻辑像素」反算出来的，而不是和别处取同一个字号：三个
+     * 图标字形在自己的 em 方格里占的比例差很多（网易云 0.69em、QQ 音乐 0.53em、fontello 的链条
+     * 0.91em），统一字号会让它们看起来一大一小。反算后 create(52)/create(68)/create(40) 分别得到
+     * 17.94 / 17.88 / 18.22 像素的墨迹，肉眼一致。</p>
+     *
+     * <p>刻意不靠绘制时缩放去放大小字号的渲染器：字形图集是 2 倍超采样 + 精确 0.5 倍缩小，任何
+     * 额外的非整数倍率都会重采样发虚。代价是每个 CFontRenderer 各自持有一张 2048² 的 GL_ALPHA
+     * 图集（约 4MB 显存），所以只加了这三档，其它地方要用大号品牌图标时请复用它们。</p>
+     */
+    public static CFontRenderer musicBrand52;
     /**
      * 「下一首播放」图标字体（player-queue-icons，fontello U+E309）的两档字号。
      *
@@ -58,6 +73,8 @@ public class FontManager extends AbstractManager {
     public static CFontRenderer actionIcon34, actionIcon38;
     /** QQ Music brand icon font; deliberately separate from Fontello login glyphs. */
     public static CFontRenderer qqMusicIcon16, qqMusicIcon20;
+    /** 与 {@link #musicBrand52} 配套：QQ 音乐的品牌字形在另一份字体里（music-brand-icons 没有 U+E888）。 */
+    public static CFontRenderer qqMusicIcon68;
     /**
      * 灵动岛状态/结果图标字体（island-status-icons，fontello U+E901~E904 与 U+E803/E807/E808）。
      *
@@ -66,6 +83,18 @@ public class FontManager extends AbstractManager {
      * 字形是按字号栅格化的，共用一档会在其中一处明显发虚。</p>
      */
     public static CFontRenderer islandIcon12, islandIcon16;
+    /**
+     * HUD 设置界面的图标字体（hud-settings-icons，Material Design Icons round 一档，U+E200~E21F）。
+     *
+     * <p>三档字号对应 12 / 16 / 20 逻辑像素的图标方格：这份字体的每个字形都占满 1000 upem 的
+     * em 方格（{@code HudSettingsIcons.LOCATOR} 就是用来量这个方格的），而 {@code create(N)} 对
+     * TrueType 的 AWT 字号正好是 N、落到屏幕上是 N×0.5 像素，所以 24/32/40 直接读成 12/16/20。</p>
+     *
+     * <p>不做「取一档再缩放」：字形图集是 2 倍超采样 + 精确 0.5 倍缩小，任何额外的非整数倍率都会
+     * 重采样发虚。代价是每档各自持有一张 2048² 的 GL_ALPHA 图集（约 4MB 显存），因此只开三档，
+     * 新的图标位置请就近复用而不是再加字号。</p>
+     */
+    public static CFontRenderer settingsIcon24, settingsIcon32, settingsIcon40;
 
     public static List<CFontRenderer> getAllFontRenderers() {
 
@@ -127,19 +156,26 @@ public class FontManager extends AbstractManager {
         fontello16 = create(16, "fontello");
         fontello18 = create(18, "fontello");
         fontello22 = create(22, "fontello");
+        fontello40 = create(40, "fontello");
 
         musicBrand16 = create(16, "music-brand-icons");
         musicBrand18 = create(18, "music-brand-icons");
+        musicBrand52 = create(52, "music-brand-icons");
         qqMusicIcon16 = create(16, "qq-music-icons");
         // The QQ Music brand glyph has more internal whitespace than the NetEase glyph.
         // Use a dedicated larger renderer in the source switcher so both providers read at the same visual size.
         qqMusicIcon20 = create(20, "qq-music-icons");
+        qqMusicIcon68 = create(68, "qq-music-icons");
         queueIcon34 = create(34, "player-queue-icons");
         queueIcon38 = create(38, "player-queue-icons");
         actionIcon34 = create(34, "player-action-icons");
         actionIcon38 = create(38, "player-action-icons");
         islandIcon12 = create(12, "island-status-icons");
         islandIcon16 = create(16, "island-status-icons");
+
+        settingsIcon24 = create(24, "hud-settings-icons");
+        settingsIcon32 = create(32, "hud-settings-icons");
+        settingsIcon40 = create(40, "hud-settings-icons");
     }
 
     /**

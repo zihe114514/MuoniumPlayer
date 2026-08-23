@@ -150,18 +150,48 @@ public final class HudConfig {
      */
     public static boolean dynamicIslandAmbientNowPlaying = true;
     /**
-     * 常驻内容轮换。打开后"状态页(帧率/延迟/时间)"与"正在播放页"按 {@link #dynamicIslandAmbientRotateSeconds}
-     * 交替显示;关掉则固定停在状态页(状态三项全关时才固定显示正在播放页)。
+     * 常驻内容轮换。打开后"状态页(帧率/延迟/时间)"与"正在播放页"交替显示;关掉则固定停在状态页
+     * (状态三项全关时才固定显示正在播放页)。两页各自的停留时长分别由
+     * {@link #dynamicIslandAmbientStatusSeconds} 与 {@link #dynamicIslandAmbientNowPlayingSeconds} 决定。
      */
     public static boolean dynamicIslandAmbientRotate = true;
-    /** 常驻内容轮换间隔(秒)。 */
-    public static float dynamicIslandAmbientRotateSeconds = 6.0f;
+    /**
+     * 状态页(帧率/延迟/时间)的停留时长(秒)。
+     *
+     * <p>与歌曲页分开配置的原因很实际:状态页是三个数字,扫一眼就够了;歌曲页要读歌名和歌手,
+     * 常常还是长标题,需要更久才看得完。两者用同一个间隔时,要么状态页停得过久,要么歌名还没读完
+     * 就翻页了。</p>
+     */
+    public static float dynamicIslandAmbientStatusSeconds = 5.0f;
+    /** 正在播放页的停留时长(秒)。默认比状态页长一些,留出读完歌名与歌手的时间。 */
+    public static float dynamicIslandAmbientNowPlayingSeconds = 8.0f;
 
     /**
      * 网易云动态封面(需要外部 ffmpeg 抽帧)。关掉后桌面歌曲信息、全屏歌词页与播放条一律用静态封面。
      * 这里是唯一的真实来源,HUD 编辑器与模块开关都读写它。
      */
     public static boolean animatedCoverEnabled = true;
+
+    /**
+     * HUD 设置界面用哪一套外观:{@code true} 走现代界面(侧边栏分类 + 卡片分组 + 每行带说明),
+     * {@code false} 走经典界面(右侧一列可折叠长面板)。
+     *
+     * <p>两套界面的设置项完全一样(都来自 {@code HudSettingsModel}),只是呈现不同;两边都有
+     * 互相切换的按钮,点了之后这里会被记住,下次打开直接是选中的那一套。刻意不做成"新界面替换旧界面":
+     * 经典界面把全部滑块平铺成一列,熟悉之后找某一项其实更快。</p>
+     */
+    public static boolean hudEditorModernUi = true;
+
+    /**
+     * 现代 HUD 设置面板左上角的位置,归一化到「可摆放范围」的 0..1。
+     *
+     * <p>{@code -1} 是哨兵值,意思是「用户从没拖过」,此时面板仍走默认摆位(靠右、纵向居中)。
+     * 用哨兵而不是直接存 0..1 的默认值:面板尺寸会随窗口大小变,把默认位置存成具体比例的话,
+     * 换个分辨率再打开就会偏到奇怪的地方;而只要没拖过,默认摆位每次都按当前窗口重新算。</p>
+     */
+    public static float hudEditorPanelX = -1.0f;
+    /** 见 {@link #hudEditorPanelX}。 */
+    public static float hudEditorPanelY = -1.0f;
 
     private HudConfig() {
     }
@@ -220,7 +250,8 @@ public final class HudConfig {
         dynamicIslandAmbientClock = true;
         dynamicIslandAmbientNowPlaying = true;
         dynamicIslandAmbientRotate = true;
-        dynamicIslandAmbientRotateSeconds = 6.0f;
+        dynamicIslandAmbientStatusSeconds = 5.0f;
+        dynamicIslandAmbientNowPlayingSeconds = 8.0f;
     }
 
     /** 恢复封面相关外观。 */
@@ -298,9 +329,19 @@ public final class HudConfig {
             dynamicIslandAmbientPing = getBoolean(o, "dynamicIslandAmbientPing", dynamicIslandAmbientPing);
             dynamicIslandAmbientClock = getBoolean(o, "dynamicIslandAmbientClock", dynamicIslandAmbientClock);
         dynamicIslandAmbientNowPlaying = getBoolean(o, "dynamicIslandAmbientNowPlaying", dynamicIslandAmbientNowPlaying);
+        hudEditorModernUi = getBoolean(o, "hudEditorModernUi", hudEditorModernUi);
+        hudEditorPanelX = clamp(getFloat(o, "hudEditorPanelX", hudEditorPanelX), -1.0f, 1.0f);
+        hudEditorPanelY = clamp(getFloat(o, "hudEditorPanelY", hudEditorPanelY), -1.0f, 1.0f);
         dynamicIslandAmbientRotate = getBoolean(o, "dynamicIslandAmbientRotate", dynamicIslandAmbientRotate);
-        dynamicIslandAmbientRotateSeconds = clamp(getFloat(o, "dynamicIslandAmbientRotateSeconds",
-                dynamicIslandAmbientRotateSeconds), 2.0f, 30.0f);
+        // 1.3.0 及更早只有一个「常驻轮换间隔」。拆成两页各自的时长后，用旧键当两个新键的默认值,
+        // 这样此前手动调过间隔的配置会平移到两边,而不是被悄悄重置回新默认值。
+        float legacyRotateSeconds = clamp(getFloat(o, "dynamicIslandAmbientRotateSeconds", 0.0f), 0.0f, 30.0f);
+        float statusFallback = legacyRotateSeconds >= 2.0f ? legacyRotateSeconds : dynamicIslandAmbientStatusSeconds;
+        float playingFallback = legacyRotateSeconds >= 2.0f ? legacyRotateSeconds : dynamicIslandAmbientNowPlayingSeconds;
+        dynamicIslandAmbientStatusSeconds = clamp(getFloat(o, "dynamicIslandAmbientStatusSeconds",
+                statusFallback), 2.0f, 30.0f);
+        dynamicIslandAmbientNowPlayingSeconds = clamp(getFloat(o, "dynamicIslandAmbientNowPlayingSeconds",
+                playingFallback), 2.0f, 30.0f);
 
             animatedCoverEnabled = getBoolean(o, "animatedCoverEnabled", animatedCoverEnabled);
         } catch (Throwable ignored) {
@@ -369,7 +410,11 @@ public final class HudConfig {
             o.addProperty("dynamicIslandAmbientClock", dynamicIslandAmbientClock);
         o.addProperty("dynamicIslandAmbientNowPlaying", dynamicIslandAmbientNowPlaying);
         o.addProperty("dynamicIslandAmbientRotate", dynamicIslandAmbientRotate);
-        o.addProperty("dynamicIslandAmbientRotateSeconds", dynamicIslandAmbientRotateSeconds);
+        o.addProperty("hudEditorModernUi", hudEditorModernUi);
+        o.addProperty("hudEditorPanelX", hudEditorPanelX);
+        o.addProperty("hudEditorPanelY", hudEditorPanelY);
+        o.addProperty("dynamicIslandAmbientStatusSeconds", dynamicIslandAmbientStatusSeconds);
+        o.addProperty("dynamicIslandAmbientNowPlayingSeconds", dynamicIslandAmbientNowPlayingSeconds);
 
             o.addProperty("animatedCoverEnabled", animatedCoverEnabled);
 

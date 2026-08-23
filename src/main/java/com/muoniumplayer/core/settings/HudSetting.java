@@ -41,7 +41,8 @@ public enum HudSetting {
     DYNAMIC_ISLAND_ENTRANCE_DURATION("入场时长(ms)", 160.0f, 1200.0f),
     DYNAMIC_ISLAND_OVERSHOOT("入场回弹", 0.00f, 2.00f),
     DYNAMIC_ISLAND_SPINNER_SPEED("加载转速", 0.30f, 3.00f),
-    DYNAMIC_ISLAND_AMBIENT_ROTATE("常驻轮换间隔(s)", 2.00f, 30.00f);
+    DYNAMIC_ISLAND_AMBIENT_STATUS("常驻状态时长(s)", 2.00f, 30.00f),
+    DYNAMIC_ISLAND_AMBIENT_NOW_PLAYING("常驻歌曲时长(s)", 2.00f, 30.00f);
 
     private final String label;
     private final float min;
@@ -101,7 +102,8 @@ public enum HudSetting {
             case DYNAMIC_ISLAND_ENTRANCE_DURATION: return HudConfig.dynamicIslandEntranceDuration;
             case DYNAMIC_ISLAND_OVERSHOOT: return HudConfig.dynamicIslandOvershoot;
             case DYNAMIC_ISLAND_SPINNER_SPEED: return HudConfig.dynamicIslandSpinnerSpeed;
-            case DYNAMIC_ISLAND_AMBIENT_ROTATE: return HudConfig.dynamicIslandAmbientRotateSeconds;
+            case DYNAMIC_ISLAND_AMBIENT_STATUS: return HudConfig.dynamicIslandAmbientStatusSeconds;
+            case DYNAMIC_ISLAND_AMBIENT_NOW_PLAYING: return HudConfig.dynamicIslandAmbientNowPlayingSeconds;
             default: throw new IllegalStateException("Unknown HUD setting: " + this);
         }
     }
@@ -143,7 +145,8 @@ public enum HudSetting {
             case DYNAMIC_ISLAND_ENTRANCE_DURATION: HudConfig.dynamicIslandEntranceDuration = clamped; break;
             case DYNAMIC_ISLAND_OVERSHOOT: HudConfig.dynamicIslandOvershoot = clamped; break;
             case DYNAMIC_ISLAND_SPINNER_SPEED: HudConfig.dynamicIslandSpinnerSpeed = clamped; break;
-            case DYNAMIC_ISLAND_AMBIENT_ROTATE: HudConfig.dynamicIslandAmbientRotateSeconds = clamped; break;
+            case DYNAMIC_ISLAND_AMBIENT_STATUS: HudConfig.dynamicIslandAmbientStatusSeconds = clamped; break;
+            case DYNAMIC_ISLAND_AMBIENT_NOW_PLAYING: HudConfig.dynamicIslandAmbientNowPlayingSeconds = clamped; break;
             default: throw new IllegalStateException("Unknown HUD setting: " + this);
         }
     }
