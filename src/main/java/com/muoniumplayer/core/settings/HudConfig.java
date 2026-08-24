@@ -2,7 +2,9 @@ package com.muoniumplayer.core.settings;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 
 import java.io.File;
 
@@ -20,6 +22,9 @@ public final class HudConfig {
 
     /** 灵动岛样式索引上限,与 {@code DownloadDynamicIsland.DynamicIslandStyle} 的数量保持一致。 */
     public static final int DYNAMIC_ISLAND_STYLE_MAX = 6;
+
+    /** 全屏歌词样式索引上限,与 {@code FullscreenLyricStyle} 的数量保持一致。 */
+    public static final int FULLSCREEN_LYRIC_STYLE_MAX = 1;
 
     private static final File FILE = ConfigPaths.HUD;
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -71,6 +76,58 @@ public final class HudConfig {
      * 作用于 OSD 桌面歌词的整行光晕，调大它会让桌面歌词一起过曝。</p>
      */
     public static float fullscreenGlowStrength = 0.55f;
+
+    /**
+     * 全屏歌词页的展示样式索引，对应 {@code FullscreenLyricStyle} 的序号。
+     *
+     * <p>存索引而不是枚举名：枚举名一改配置就读不回来了，而索引只要求新样式往后追加。
+     * 越界时渲染层退回经典样式。</p>
+     */
+    public static int fullscreenLyricStyle = 0;
+
+    // ---- 「律动词云」背景装饰的配色 ----
+
+    /** 自定义调色板的槽位数。想加槽位只需要改大它，旧配置里少的那几槽会补默认色。 */
+    public static final int CADENZA_PALETTE_SLOTS = 6;
+
+    /** 参与轮换的颜色个数下限。只有一个颜色就等于不换色，那用「跟随主题」更省事。 */
+    public static final int CADENZA_COLOR_COUNT_MIN = 2;
+
+    public static final int CADENZA_BEATS_PER_COLOR_MIN = 1;
+    public static final int CADENZA_BEATS_PER_COLOR_MAX = 16;
+
+    /**
+     * 调色板默认色：只存 RGB 低 24 位。
+     *
+     * <p>alpha 不存在这里——装饰层的透明度是按「形状 / 粒子 / 光斑」分别算出来的（见
+     * {@code CadenzaDecorLayer}），如果这里也带一份 alpha，两边会互相打架。</p>
+     */
+    private static final int[] CADENZA_DEFAULT_COLORS = {
+            0xFF4D6D, 0xFF9A4D, 0xFFE04D, 0x4DE0A0, 0x4DA8FF, 0xB44DFF
+    };
+
+    /**
+     * 背景装饰（几何形状 / 上升光点 / 踩点光斑）的取色来源。
+     *
+     * <p>{@code 0} = 跟随播放器主题强调色，也就是加这个开关之前的唯一行为；{@code 1} = 用下面的
+     * 自定义调色板，并按 {@link #cadenzaBeatsPerColor} 每若干拍换一个颜色。</p>
+     *
+     * <p>只影响背景装饰，歌词文字本身永远跟随主题强调色——否则自定义一个低饱和度的颜色就会把字
+     * 一起弄糊。</p>
+     */
+    public static int cadenzaDecorColorMode = 0;
+
+    /**
+     * 自定义调色板，长度恒为 {@link #CADENZA_PALETTE_SLOTS}，只有前 {@link #cadenzaDecorColorCount}
+     * 个参与轮换。存成定长数组而不是变长 List：越界读写在渲染热路径上是致命的，定长 + 取模最省心。
+     */
+    public static int[] cadenzaDecorColors = CADENZA_DEFAULT_COLORS.clone();
+
+    /** 调色板实际参与轮换的颜色个数，{@link #CADENZA_COLOR_COUNT_MIN}..{@link #CADENZA_PALETTE_SLOTS}。 */
+    public static int cadenzaDecorColorCount = 4;
+
+    /** 打满这么多拍换下一个颜色。拍是实时包络数出来的，不是 BPM 推的。 */
+    public static int cadenzaBeatsPerColor = 4;
 
     // OSD KTV animation. These values are independent from the full-screen lyric renderer.
     public static float osdKaraokeTransitionWidth = 14.0f;
@@ -212,6 +269,11 @@ public final class HudConfig {
         currentTransitionWidth = 14.0f;
         currentBreathStrength = 0.015f;
         fullscreenGlowStrength = 0.55f;
+        fullscreenLyricStyle = 0;
+        cadenzaDecorColorMode = 0;
+        cadenzaDecorColors = CADENZA_DEFAULT_COLORS.clone();
+        cadenzaDecorColorCount = 4;
+        cadenzaBeatsPerColor = 4;
         osdKaraokeTransitionWidth = 14.0f;
         osdKaraokeGlowStrength = 0.68f;
         osdKaraokeBloomStrength = 0.46f;
@@ -292,6 +354,14 @@ public final class HudConfig {
             currentTransitionWidth = clamp(getFloat(o, "currentTransitionWidth", currentTransitionWidth), 4.0f, 32.0f);
             currentBreathStrength = clamp(getFloat(o, "currentBreathStrength", currentBreathStrength), 0.0f, 0.08f);
             fullscreenGlowStrength = clamp01(getFloat(o, "fullscreenGlowStrength", fullscreenGlowStrength));
+            fullscreenLyricStyle = clampInt(getInt(o, "fullscreenLyricStyle", fullscreenLyricStyle), 0,
+                    FULLSCREEN_LYRIC_STYLE_MAX);
+            cadenzaDecorColorMode = clampInt(getInt(o, "cadenzaDecorColorMode", cadenzaDecorColorMode), 0, 1);
+            cadenzaDecorColorCount = clampInt(getInt(o, "cadenzaDecorColorCount", cadenzaDecorColorCount),
+                    CADENZA_COLOR_COUNT_MIN, CADENZA_PALETTE_SLOTS);
+            cadenzaBeatsPerColor = clampInt(getInt(o, "cadenzaBeatsPerColor", cadenzaBeatsPerColor),
+                    CADENZA_BEATS_PER_COLOR_MIN, CADENZA_BEATS_PER_COLOR_MAX);
+            cadenzaDecorColors = getRgbArray(o, "cadenzaDecorColors", cadenzaDecorColors);
 
             osdKaraokeTransitionWidth = clamp(getFloat(o, "osdKaraokeTransitionWidth", osdKaraokeTransitionWidth), 4.0f, 32.0f);
             osdKaraokeGlowStrength = clamp01(getFloat(o, "osdKaraokeGlowStrength", osdKaraokeGlowStrength));
@@ -374,6 +444,11 @@ public final class HudConfig {
             o.addProperty("currentTransitionWidth", currentTransitionWidth);
             o.addProperty("currentBreathStrength", currentBreathStrength);
             o.addProperty("fullscreenGlowStrength", fullscreenGlowStrength);
+            o.addProperty("fullscreenLyricStyle", fullscreenLyricStyle);
+            o.addProperty("cadenzaDecorColorMode", cadenzaDecorColorMode);
+            o.addProperty("cadenzaDecorColorCount", cadenzaDecorColorCount);
+            o.addProperty("cadenzaBeatsPerColor", cadenzaBeatsPerColor);
+            o.add("cadenzaDecorColors", rgbArray(cadenzaDecorColors));
             o.addProperty("osdKaraokeTransitionWidth", osdKaraokeTransitionWidth);
             o.addProperty("osdKaraokeGlowStrength", osdKaraokeGlowStrength);
             o.addProperty("osdKaraokeBloomStrength", osdKaraokeBloomStrength);
@@ -428,6 +503,62 @@ public final class HudConfig {
         return Math.max(min, Math.min(max, v));
     }
 
+    /** 参与轮换的颜色个数，已经夹到合法区间。渲染层与设置界面都只认这个值，不要直接读字段。 */
+    public static int cadenzaColorCount() {
+        return clampInt(cadenzaDecorColorCount, CADENZA_COLOR_COUNT_MIN, CADENZA_PALETTE_SLOTS);
+    }
+
+    /** 每几拍换色，已经夹到合法区间。 */
+    public static int cadenzaBeatsPerColor() {
+        return clampInt(cadenzaBeatsPerColor, CADENZA_BEATS_PER_COLOR_MIN, CADENZA_BEATS_PER_COLOR_MAX);
+    }
+
+    /**
+     * 调色板里第 {@code index} 轮的颜色，返回不含 alpha 的 RGB。
+     *
+     * <p>{@code index} 是「第几次换色」，可以无限增大也可以是负数（不该出现，但拍计数是 int，
+     * 长时间播放理论上会溢出），这里一律取模到有效槽位，永远不抛。</p>
+     */
+    public static int cadenzaPaletteColor(int index) {
+        int count = cadenzaColorCount();
+        int[] colors = cadenzaDecorColors;
+        if (colors == null || colors.length == 0) {
+            return CADENZA_DEFAULT_COLORS[Math.abs(index) % CADENZA_DEFAULT_COLORS.length];
+        }
+        int slot = ((index % count) + count) % count;
+        if (slot >= colors.length) slot = colors.length - 1;
+        return colors[slot] & 0xFFFFFF;
+    }
+
+    /** 读某一槽的当前颜色（RGB）。越界返回默认色，不抛。 */
+    public static int cadenzaSlotColor(int slot) {
+        if (slot < 0 || slot >= CADENZA_PALETTE_SLOTS) return CADENZA_DEFAULT_COLORS[0];
+        int[] colors = cadenzaDecorColors;
+        if (colors == null || slot >= colors.length) return CADENZA_DEFAULT_COLORS[slot];
+        return colors[slot] & 0xFFFFFF;
+    }
+
+    /** 写某一槽的颜色（只取 RGB 低 24 位）。数组丢了或长度不对会先补齐再写。 */
+    public static void setCadenzaSlotColor(int slot, int rgb) {
+        if (slot < 0 || slot >= CADENZA_PALETTE_SLOTS) return;
+        if (cadenzaDecorColors == null || cadenzaDecorColors.length != CADENZA_PALETTE_SLOTS) {
+            int[] fixed = CADENZA_DEFAULT_COLORS.clone();
+            if (cadenzaDecorColors != null) {
+                for (int i = 0; i < fixed.length && i < cadenzaDecorColors.length; i++) {
+                    fixed[i] = cadenzaDecorColors[i] & 0xFFFFFF;
+                }
+            }
+            cadenzaDecorColors = fixed;
+        }
+        cadenzaDecorColors[slot] = rgb & 0xFFFFFF;
+    }
+
+    /** 某一槽的出厂颜色，供设置界面「重置这一槽」用。 */
+    public static int cadenzaDefaultSlotColor(int slot) {
+        if (slot < 0 || slot >= CADENZA_DEFAULT_COLORS.length) return CADENZA_DEFAULT_COLORS[0];
+        return CADENZA_DEFAULT_COLORS[slot];
+    }
+
     public static float clampScale(float v) {
         return clamp(v, SCALE_MIN, SCALE_MAX);
     }
@@ -466,5 +597,41 @@ public final class HudConfig {
         } catch (Throwable ignored) {
             return def;
         }
+    }
+
+    /**
+     * 读一整条调色板。
+     *
+     * <p>存 JSON 数组而不是 {@code color0..color5} 六个键：以后改 {@link #CADENZA_PALETTE_SLOTS}
+     * 时，多出来的元素直接忽略、少的那几槽补默认色，不会因为改了槽位数把用户调好的颜色读丢。
+     * 单个元素坏掉也只影响那一槽。</p>
+     */
+    private static int[] getRgbArray(JsonObject o, String key, int[] def) {
+        int[] result = new int[CADENZA_PALETTE_SLOTS];
+        for (int i = 0; i < result.length; i++) {
+            boolean hasDefault = def != null && i < def.length;
+            result[i] = hasDefault ? (def[i] & 0xFFFFFF) : cadenzaDefaultSlotColor(i);
+        }
+        try {
+            if (!o.has(key) || !o.get(key).isJsonArray()) return result;
+            JsonArray array = o.get(key).getAsJsonArray();
+            for (int i = 0; i < result.length && i < array.size(); i++) {
+                try {
+                    result[i] = array.get(i).getAsInt() & 0xFFFFFF;
+                } catch (Throwable ignored) {
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return result;
+    }
+
+    private static JsonArray rgbArray(int[] values) {
+        JsonArray array = new JsonArray();
+        for (int i = 0; i < CADENZA_PALETTE_SLOTS; i++) {
+            boolean present = values != null && i < values.length;
+            array.add(new JsonPrimitive(present ? (values[i] & 0xFFFFFF) : cadenzaDefaultSlotColor(i)));
+        }
+        return array;
     }
 }

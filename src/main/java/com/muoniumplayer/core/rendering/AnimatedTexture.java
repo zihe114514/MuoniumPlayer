@@ -23,6 +23,7 @@ import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -135,7 +136,8 @@ public class AnimatedTexture implements SharedConstants {
     }
 
     public static boolean metadataHasAnimationFrames(InputStream is) {
-        JsonObject jObj = JsonUtils.toJsonObject(new InputStreamReader(is));
+        // 资源里的 .mcmeta 是 UTF-8；不写死字符集时，中文 Windows 客户端会按 GBK 解码（开发环境是 UTF-8，测不出来）。
+        JsonObject jObj = JsonUtils.toJsonObject(new InputStreamReader(is, StandardCharsets.UTF_8));
 
         if (!jObj.isJsonObject())
             return false;
@@ -187,7 +189,8 @@ public class AnimatedTexture implements SharedConstants {
             return;
         }
 
-        JsonObject jObj = com.muoniumplayer.core.utils.json.JsonUtils.toJsonObject(new InputStreamReader(is));
+        JsonObject jObj = com.muoniumplayer.core.utils.json.JsonUtils.toJsonObject(
+                new InputStreamReader(is, StandardCharsets.UTF_8));
 
         if (!jObj.isJsonObject())
             return;

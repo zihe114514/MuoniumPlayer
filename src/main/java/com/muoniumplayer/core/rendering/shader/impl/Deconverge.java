@@ -23,7 +23,8 @@ public class Deconverge {
     Uniform3f radConvY = new Uniform3f(deconvergeProgram, "radConvY");
 
     public void render(float randomNess) {
-        this.deconvergeProgram.start();
+        // 编译失败的着色器整段跳过，详见 ShaderProgram#start()。
+        if (!this.deconvergeProgram.start()) return;
         textureIn.setValue(0);
         texelSize.setValue(1.0F / Display.getWidth(), 1.0F / Display.getHeight());
 

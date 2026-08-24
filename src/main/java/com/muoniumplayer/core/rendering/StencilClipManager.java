@@ -139,12 +139,39 @@ public class StencilClipManager implements SharedConstants {
 
         beginClipInternal(drawClipShape);
         GL11.glPushAttrib(GL11.GL_ALL_ATTRIB_BITS);
+        boolean shapeDrawn = false;
         try {
             drawClipShape.run();
+            shapeDrawn = true;
         } finally {
             GL11.glPopAttrib();
+            if (!shapeDrawn) {
+                // 裁剪形状没画完就抛异常了（典型情况：绘制回调里的着色器/资源出问题）。
+                // 这时 endClip 永远不会被调用：stencilStack 每帧多一层、stencil 测试一直开着，
+                // 之后所有绘制都被误裁。所以就地回滚这一层，把异常照原样抛给上层。
+                rollbackClip();
+            }
         }
         updateClip();
+    }
+
+    /** 撤销刚刚 {@link #beginClipInternal} 建立的那一层裁剪。只用于异常路径。 */
+    private static void rollbackClip() {
+        if (Framebuffer.currentlyBinding == null || Framebuffer.currentlyBinding.stencilStack.isEmpty()) {
+            return;
+        }
+        StencilState state = Framebuffer.currentlyBinding.stencilStack.pop();
+        Framebuffer.currentlyBinding.currentStencilValue = state.stencilValue;
+        restoreRenderState(state);
+        if (Framebuffer.currentlyBinding.currentStencilValue > 0) {
+            forceStencilTest(true);
+            GL11.glStencilFunc(GL11.GL_EQUAL, Framebuffer.currentlyBinding.currentStencilValue, 0xFF);
+            GL11.glStencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_KEEP);
+        } else {
+            // 回到最外层：模板缓冲里可能残留半个形状写进去的计数，
+            // 下一次从零开始的 beginClip 会走 initialize() 把它清掉。
+            disable();
+        }
     }
 
     public static void endClip() {

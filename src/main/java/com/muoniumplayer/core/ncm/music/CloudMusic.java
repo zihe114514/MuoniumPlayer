@@ -30,6 +30,7 @@ import com.muoniumplayer.core.utils.json.JsonUtils;
 import com.muoniumplayer.core.utils.network.HttpUtils;
 import com.muoniumplayer.core.utils.other.StringUtils;
 import com.muoniumplayer.core.utils.other.WrappedInputStream;
+import com.muoniumplayer.core.utils.other.multithreading.BackgroundWork;
 import com.muoniumplayer.core.utils.other.multithreading.MultiThreadingUtil;
 
 import java.awt.image.BufferedImage;
@@ -1518,6 +1519,9 @@ public class CloudMusic implements SharedConstants {
             String cacheKey = song.getStableKey() + "_" + quality.getQuality();
             File cachedMusic = AudioCacheFiles.findCachedAudioFile(musicCacheDir, cacheKey, type);
             if (cachedMusic != null) {
+                // 命中也要记一笔：容量淘汰只看 lastModified 的话，一首常听但下载得早的歌
+                // 会被当成最冷的缓存删掉。
+                MusicAudioCache.touch(cachedMusic);
                 return resolvePlayableAudioFile(cachedMusic);
             }
 
@@ -1552,6 +1556,10 @@ public class CloudMusic implements SharedConstants {
             }
 
             removeOtherQualityCaches(musicCacheDir, song.getStableKey(), quality.getQuality());
+            MusicAudioCache.touch(music);
+            // 目录只会因为下载而变大，所以容量兜底只需要挂在这一处；解码边车在下一句产生，
+            // 淘汰按组进行，所以这里先执行也不会把边车漏在外面。
+            MusicAudioCache.enforceLimitAsync();
             return resolvePlayableAudioFile(music);
         }
 
@@ -1905,7 +1913,9 @@ public class CloudMusic implements SharedConstants {
             final Music song = nextSong;
             final int index = nextIndex;
             final long armRevision = revision;
-            MultiThreadingUtil.runAsync(() -> armTrack(song, index, armGeneration, armRevision));
+            // 低优先级池：这条链是整首歌解码 + 若干次 ffmpeg 分析窗口，是本项目最重的后台活。
+            // 用户并没有在等它（等不到就退回普通切歌），所以绝不该和渲染线程争 CPU。
+            BackgroundWork.submit(() -> armTrack(song, index, armGeneration, armRevision));
         }
 
         /** Resolve, download, decode and hold the next track. Runs off the playback thread. */
@@ -1945,6 +1955,10 @@ public class CloudMusic implements SharedConstants {
                 // cue the reader, wire the low shelf, pull the first streaming window off the disk.
                 track.preRollMillis = Math.min(PRE_ROLL_MILLIS, Math.max(0L, track.plan.incomingCueMillis));
                 deck.setBassGainDb(track.plan.incomingBassDb(0.0));
+                // Before prepareStart, so the chain picks both values up without slewing: a pre-rolled
+                // deck is already rendering blocks (silently) well before the seam, and a duck that only
+                // starts sliding in at the handover would let the first syllable through.
+                deck.setVocalDuckDepth(track.plan.incomingVocalDepth(0.0));
                 deck.prepareStart(track.plan.incomingCueMillis - track.preRollMillis);
                 if (!armStillValid(armGeneration, armRevision)) return;
 
@@ -2201,6 +2215,8 @@ public class CloudMusic implements SharedConstants {
             }
             System.out.println("[Automix] handover -> " + track.song.getName() + " · " + plan.summary
                     + (overlapOverrideMillis > 0L ? " (manual skip)" : "")
+                    + (plan.outgoingRate(0.5, effectiveOverlap) == 1f && plan.tempoRatio != 1f
+                            ? " (rate correction dropped: " + effectiveOverlap + "ms ramp)" : "")
                     + (effectiveOverlap == requestedOverlap
                             ? "" : " (ramp shortened to " + effectiveOverlap + "ms, " + remaining + "ms left)"));
 
@@ -2214,6 +2230,9 @@ public class CloudMusic implements SharedConstants {
                 // Set before the deck sounds: it picks the value up without slewing, so the incoming
                 // track never gets one loud bass hit in before the swap takes hold.
                 incoming.setBassGainDb(plan.incomingBassDb(0.0));
+                // Same reason: the canceller slews, so the depth has to be in place before the first
+                // block is rendered or the arriving vocal gets a syllable in before the duck engages.
+                incoming.setVocalDuckDepth(plan.incomingVocalDepth(0.0));
                 incoming.setFadeGain(plan.incomingGain(0.0));
                 try {
                     if (track.preRolled) {
@@ -2275,7 +2294,7 @@ public class CloudMusic implements SharedConstants {
             loadDynamicMusicCover(track.song);
             loadLyric(track.song, nextSession, track.file);
             NeteasePlaybackHistoryReporter.start(track.song, currentPlaylistContext, incoming);
-            DownloadDynamicIsland.showAutomixHandover(track.song.getName(), plan.summary);
+            DownloadDynamicIsland.showAutomixHandover(track.song.getName());
             // 无缝交接同样是"一首 FM 曲目开始出声"，面板与预备标记都要跟着走。
             if (personalFmActive) PersonalFmManager.noteFmTrackStarted(track.song);
             return true;
@@ -2314,11 +2333,18 @@ public class CloudMusic implements SharedConstants {
             if (fade.incoming != null) {
                 fade.incoming.setFadeGain(fade.plan.incomingGain(progress));
                 fade.incoming.setBassGainDb(fade.plan.incomingBassDb(progress));
+                fade.incoming.setVocalDuckDepth(fade.plan.incomingVocalDepth(progress));
             }
             if (fade.outgoing != null) {
                 fade.outgoing.setFadeGain(fade.plan.outgoingGain(progress));
                 fade.outgoing.setBassGainDb(fade.plan.outgoingBassDb(progress));
-                fade.outgoing.setPlaybackRate(fade.plan.outgoingRate(progress));
+                // Evaluated against the ramp actually running, not the planned one: a shortened ramp
+                // must not compress a semitone of tempo lock into a couple of hundred milliseconds.
+                // 速度与音高分开给：节奏锁定只动速度（WSOLA，音高不变），整半音吸附只动音高
+                // （重采样 + WSOLA 把时长还原）。合成一个数会让 WSOLA 把「移调」当成「变速」。
+                fade.outgoing.setSpeedAndPitch(
+                        fade.plan.outgoingTempo(progress, fade.overlapMillis),
+                        fade.plan.outgoingPitch(progress, fade.overlapMillis));
             }
             if (progress < 1.0) return;
 

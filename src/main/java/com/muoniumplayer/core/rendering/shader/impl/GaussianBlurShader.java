@@ -39,6 +39,14 @@ public class GaussianBlurShader extends Shader {
             return;
         }
 
+        // 着色器编译失败时不要走离屏路径（绑了 FBO 却没有程序对象，内容会被丢掉）。
+        // 直接把回调画到当前 framebuffer 上：模糊效果没了，但界面内容还在。
+        if (!this.blurProgram.isUsable()) {
+            this.setActive(false);
+            runnable.forEach(Runnable::run);
+            return;
+        }
+
         this.update();
 
         this.setActive(this.isActive() || !runnable.isEmpty());

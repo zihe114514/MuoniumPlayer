@@ -66,6 +66,9 @@ final class VideoCoverFrames {
         try {
             ProcessBuilder builder = new ProcessBuilder(
                     ffmpeg, "-nostdin", "-hide_banner", "-v", "error",
+                    // 单线程解码 + 单线程 PNG 编码。默认按核心数开满，而这里只有几十张 256×256 要出，
+                    // 多开除了在游戏运行时抢光所有核心之外没有收益。
+                    "-threads", "1",
                     "-i", video.getAbsolutePath(),
                     "-an", "-sn", "-dn",
                     // 等比缩放后补边到正方形。补边色是全透明而不是黑色:封面槽位是圆角方形,非 1:1 的

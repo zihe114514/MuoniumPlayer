@@ -13,10 +13,13 @@ public class Uniform1i {
     private int value;
 
     public Uniform1i(ShaderProgram shader, String uniformName) {
-        this.location = GL20.glGetUniformLocation(shader.getProgramId(), uniformName);
+        this.location = shader.isUsable() ? GL20.glGetUniformLocation(shader.getProgramId(), uniformName) : -1;
     }
 
     public void setValue(int value) {
+        if (this.location < 0) {
+            return;
+        }
 
         if (this.value != value) {
             GL20.glUniform1i(location, value);

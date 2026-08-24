@@ -15,10 +15,13 @@ public class UniformFB {
     private FloatBuffer value;
 
     public UniformFB(ShaderProgram shader, String uniformName) {
-        this.location = GL20.glGetUniformLocation(shader.getProgramId(), uniformName);
+        this.location = shader.isUsable() ? GL20.glGetUniformLocation(shader.getProgramId(), uniformName) : -1;
     }
 
     public void setValue(FloatBuffer value) {
+        if (this.location < 0) {
+            return;
+        }
 
         if (this.value != value) {
             GL20.glUniform1(location, value);

@@ -1,12 +1,16 @@
 package com.muoniumplayer.core.screens.hud;
 
 import com.muoniumplayer.core.MuoniumPlayerExtension;
+import com.muoniumplayer.core.ncm.music.AutomixSettings;
 import com.muoniumplayer.core.ncm.music.CloudMusic;
+import com.muoniumplayer.core.ncm.music.MusicAudioCache;
 import com.muoniumplayer.core.rendering.DownloadDynamicIsland;
 import com.muoniumplayer.core.rendering.HudSettingsIcons;
+import com.muoniumplayer.core.screens.ncm.NCMPlayerConfig;
 import com.muoniumplayer.core.screens.ncm.NCMTheme;
 import com.muoniumplayer.core.settings.HudConfig;
 import com.muoniumplayer.core.settings.HudSetting;
+import com.muoniumplayer.core.utils.other.multithreading.MultiThreadingUtil;
 import com.muoniumplayer.core.widget.impl.MusicLyricsWidget;
 
 import java.awt.Color;
@@ -262,6 +266,10 @@ public final class HudSettingsModel {
                 return label;
             }
         }, description, null, null, run, null, ColorTarget.NONE);
+    }
+
+    private static Entry action(Supplier<String> label, String description, Runnable run) {
+        return new Entry(Kind.ACTION, label, description, null, null, run, null, ColorTarget.NONE);
     }
 
     private static MusicLyricsWidget lyrics() {
@@ -531,6 +539,115 @@ public final class HudSettingsModel {
                                             }
                                         }))),
 
+                new Category("无缝切换", "两首歌之间的交接方式与衔接处理", 0xFF5FD3E8, HudSettingsIcons.SPEED,
+                        new Group("基础", HudSettingsIcons.TUNE,
+                                toggle("无缝切换", "打开后提前解码下一首并交叉淡化；关掉则切歌时先停下再重新下载解码，中间有静音间隙。",
+                                        new BooleanSupplier() {
+                                            public boolean getAsBoolean() {
+                                                return AutomixSettings.isEnabled();
+                                            }
+                                        }, new Runnable() {
+                                            public void run() {
+                                                AutomixSettings.setEnabled(!AutomixSettings.isEnabled());
+                                            }
+                                        }),
+                                choice("重叠时长", "两首歌同时出声的长度。手动按下一曲时会自动缩短到 0.9 秒，这里只影响放完自动切歌。",
+                                        new Supplier<String>() {
+                                            public String get() {
+                                                return AutomixSettings.getOverlapLabel();
+                                            }
+                                        }, new Runnable() {
+                                            public void run() {
+                                                AutomixSettings.cycleOverlapSeconds();
+                                            }
+                                        })),
+                        new Group("衔接处理", HudSettingsIcons.SPARKLE,
+                                toggle("跳过前奏", "打开后新歌从主体进来，跳掉没内容的前奏；关掉则一律从第 0 秒淡入，也就是旧版的平滑切换。前奏位置照样会被分析，关掉不影响对拍。",
+                                        new BooleanSupplier() {
+                                            public boolean getAsBoolean() {
+                                                return AutomixSettings.isSkipIntroEnabled();
+                                            }
+                                        }, new Runnable() {
+                                            public void run() {
+                                                AutomixSettings.setSkipIntroEnabled(!AutomixSettings.isSkipIntroEnabled());
+                                            }
+                                        }),
+                                toggle("小节对齐", "把交接点挪到最近的小节线上，让两首歌的鼓点落在一起而不是互相错开。",
+                                        new BooleanSupplier() {
+                                            public boolean getAsBoolean() {
+                                                return AutomixSettings.isBeatAlignEnabled();
+                                            }
+                                        }, new Runnable() {
+                                            public void run() {
+                                                AutomixSettings.setBeatAlignEnabled(!AutomixSettings.isBeatAlignEnabled());
+                                            }
+                                        }),
+                                toggle("低频交换", "重叠期间压掉一首的低频，两条鼓与贝斯叠在一起才不会糊成一团。",
+                                        new BooleanSupplier() {
+                                            public boolean getAsBoolean() {
+                                                return AutomixSettings.isBassSwapEnabled();
+                                            }
+                                        }, new Runnable() {
+                                            public void run() {
+                                                AutomixSettings.setBassSwapEnabled(!AutomixSettings.isBassSwapEnabled());
+                                            }
+                                        }),
+                                toggle("去人声淡入", "新歌淡入的前半段压掉中置人声只留伴奏，避免两首歌的人声同时在唱。",
+                                        new BooleanSupplier() {
+                                            public boolean getAsBoolean() {
+                                                return AutomixSettings.isVocalDuckEnabled();
+                                            }
+                                        }, new Runnable() {
+                                            public void run() {
+                                                AutomixSettings.setVocalDuckEnabled(!AutomixSettings.isVocalDuckEnabled());
+                                            }
+                                        }),
+                                toggle("节奏锁定", "重叠期间微调旧歌的速度去追上新歌的 BPM。因为是重采样，会带来最多约 1% 的音调偏移。",
+                                        new BooleanSupplier() {
+                                            public boolean getAsBoolean() {
+                                                return AutomixSettings.isTempoLockEnabled();
+                                            }
+                                        }, new Runnable() {
+                                            public void run() {
+                                                AutomixSettings.setTempoLockEnabled(!AutomixSettings.isTempoLockEnabled());
+                                            }
+                                        }),
+                                toggle("音高跳跃", "两首歌速度对不上时，把旧歌整体移调一个半音去凑更协和的和声。听得出音调变化，不想要就关掉。",
+                                        new BooleanSupplier() {
+                                            public boolean getAsBoolean() {
+                                                return AutomixSettings.isPitchMatchEnabled();
+                                            }
+                                        }, new Runnable() {
+                                            public void run() {
+                                                AutomixSettings.setPitchMatchEnabled(!AutomixSettings.isPitchMatchEnabled());
+                                            }
+                                        }))),
+
+                new Category("存储", "已下载音频的磁盘占用与上限", 0xFFD8A657, HudSettingsIcons.STORAGE,
+                        new Group("音频缓存", HudSettingsIcons.SWEEP,
+                                choice("缓存上限",
+                                        "MusicCache 目录最多占多少磁盘。超出后从最久没听的歌开始整首删除，正在播放与预备播放的歌不会被删。",
+                                        new Supplier<String>() {
+                                            public String get() {
+                                                return NCMPlayerConfig.getMusicCacheLimitLabel();
+                                            }
+                                        }, new Runnable() {
+                                            public void run() {
+                                                NCMPlayerConfig.cycleMusicCacheLimit();
+                                                MusicAudioCache.enforceLimitAsync();
+                                            }
+                                        }),
+                                action(new Supplier<String>() {
+                                    public String get() {
+                                        return cacheSweepLabel();
+                                    }
+                                }, "现在就按上限清一次，同时删掉中断的下载与转码残片。上限为「不限制」时只清残片。",
+                                        new Runnable() {
+                                            public void run() {
+                                                sweepAudioCache();
+                                            }
+                                        }))),
+
                 new Category("主题", "播放器与灵动岛的整体配色", 0xFFB68CFF, HudSettingsIcons.PALETTE,
                         new Group("配色预设", HudSettingsIcons.PALETTE,
                                 choice("播放器主题", "点击在全部预设之间依次切换。",
@@ -576,6 +693,33 @@ public final class HudSettingsModel {
                                             }
                                         })))
         };
+    }
+
+    /** 「立即清理」那一行的标签，顺带把当前占用显示出来。 */
+    public static String cacheSweepLabel() {
+        try {
+            return "立即清理 · 当前 " + MusicAudioCache.formatBytes(MusicAudioCache.cachedTotalBytes());
+        } catch (Throwable ignored) {
+            return "立即清理";
+        }
+    }
+
+    /** 手动清理走后台线程：扫目录加删文件不能压在渲染线程上。结果用灵动岛回报。 */
+    public static void sweepAudioCache() {
+        MultiThreadingUtil.runAsync(new Runnable() {
+            public void run() {
+                try {
+                    MusicAudioCache.Sweep result = MusicAudioCache.enforceLimit();
+                    String detail = result.freedBytes <= 0L
+                            ? "没有可回收的缓存 · 占用 " + MusicAudioCache.formatBytes(result.remainingBytes)
+                            : "回收 " + MusicAudioCache.formatBytes(result.freedBytes)
+                                    + " · 剩余 " + MusicAudioCache.formatBytes(result.remainingBytes);
+                    DownloadDynamicIsland.showCacheSweep(detail, true);
+                } catch (Throwable failure) {
+                    DownloadDynamicIsland.showCacheSweep("无法访问缓存目录", false);
+                }
+            }
+        });
     }
 
     private static void applyTheme(NCMTheme.ThemePreset preset) {

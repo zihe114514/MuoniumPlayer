@@ -67,6 +67,8 @@ ICONS = [
     (0xE21D, "refresh", "refresh"),
     (0xE21E, "back", "arrow_back"),
     (0xE21F, "grip", "drag_handle"),
+    (0xE220, "storage", "storage"),
+    (0xE221, "sweep", "delete_sweep"),
 ]
 
 FRAME_CODE = 0xE2FF

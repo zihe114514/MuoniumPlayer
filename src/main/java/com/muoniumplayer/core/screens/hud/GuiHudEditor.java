@@ -12,9 +12,12 @@ import com.muoniumplayer.core.MuoniumPlayerExtension;
 import com.muoniumplayer.core.management.FontManager;
 import com.muoniumplayer.core.rendering.font.CFontRenderer;
 import com.muoniumplayer.core.ncm.music.CloudMusic;
+import com.muoniumplayer.core.ncm.music.AutomixSettings;
+import com.muoniumplayer.core.ncm.music.MusicAudioCache;
 import com.muoniumplayer.core.rendering.shader.Shaders;
 import com.muoniumplayer.core.rendering.DownloadDynamicIsland;
 import com.muoniumplayer.core.rendering.rendersystem.RenderSystem;
+import com.muoniumplayer.core.screens.ncm.NCMPlayerConfig;
 import com.muoniumplayer.core.screens.ncm.NCMScreen;
 import com.muoniumplayer.core.screens.ncm.NCMTheme;
 import com.muoniumplayer.core.settings.HudConfig;
@@ -111,6 +114,8 @@ public class GuiHudEditor extends GuiScreen {
     private boolean normalExpanded = true;
     private boolean islandExpanded = true;
     private boolean coverExpanded = true;
+    private boolean automixExpanded = true;
+    private boolean storageExpanded = true;
     private boolean themeExpanded = true;
     private boolean settingsCollapsed;
     private int settingsScroll;
@@ -504,6 +509,49 @@ public class GuiHudEditor extends GuiScreen {
             rowY += SECTION_H;
             if (coverExpanded) {
                 drawToggleRow(fr, animatedCoverLabel(), HudConfig.animatedCoverEnabled,
+                        x + 6, rowY, mouseX, mouseY);
+                rowY += COLOR_ROW_H;
+            }
+
+            drawSectionHeader(fr, "无缝切换", automixExpanded, x + 5, rowY,
+                    SETTINGS_W - 10, mouseX, mouseY, 0xFF5FD3E8);
+            rowY += SECTION_H;
+            if (automixExpanded) {
+                drawToggleRow(fr, "无缝切换", AutomixSettings.isEnabled(),
+                        x + 6, rowY, mouseX, mouseY);
+                rowY += COLOR_ROW_H;
+                drawChoiceRow(fr, "重叠时长", AutomixSettings.getOverlapLabel(),
+                        x + 6, rowY, mouseX, mouseY);
+                rowY += COLOR_ROW_H;
+                drawToggleRow(fr, "跳过前奏", AutomixSettings.isSkipIntroEnabled(),
+                        x + 6, rowY, mouseX, mouseY);
+                rowY += COLOR_ROW_H;
+                drawToggleRow(fr, "小节对齐", AutomixSettings.isBeatAlignEnabled(),
+                        x + 6, rowY, mouseX, mouseY);
+                rowY += COLOR_ROW_H;
+                drawToggleRow(fr, "低频交换", AutomixSettings.isBassSwapEnabled(),
+                        x + 6, rowY, mouseX, mouseY);
+                rowY += COLOR_ROW_H;
+                drawToggleRow(fr, "去人声淡入", AutomixSettings.isVocalDuckEnabled(),
+                        x + 6, rowY, mouseX, mouseY);
+                rowY += COLOR_ROW_H;
+                drawToggleRow(fr, "节奏锁定", AutomixSettings.isTempoLockEnabled(),
+                        x + 6, rowY, mouseX, mouseY);
+                rowY += COLOR_ROW_H;
+                drawToggleRow(fr, "音高跳跃", AutomixSettings.isPitchMatchEnabled(),
+                        x + 6, rowY, mouseX, mouseY);
+                rowY += COLOR_ROW_H;
+            }
+
+            drawSectionHeader(fr, "存储", storageExpanded, x + 5, rowY,
+                    SETTINGS_W - 10, mouseX, mouseY, 0xFFD8A657);
+            rowY += SECTION_H;
+            if (storageExpanded) {
+                drawChoiceRow(fr, "缓存上限", NCMPlayerConfig.getMusicCacheLimitLabel(),
+                        x + 6, rowY, mouseX, mouseY);
+                rowY += COLOR_ROW_H;
+                drawChoiceRow(fr, "立即清理",
+                        MusicAudioCache.formatBytes(MusicAudioCache.cachedTotalBytes()),
                         x + 6, rowY, mouseX, mouseY);
                 rowY += COLOR_ROW_H;
             }
@@ -1006,6 +1054,75 @@ public class GuiHudEditor extends GuiScreen {
             }
 
             if (isInside(mouseX, mouseY, panelX + 5, rowY, SETTINGS_W - 10, SECTION_H)) {
+                automixExpanded = !automixExpanded;
+                settingsScroll = getSettingsLayout().clampScroll(settingsScroll, panelH);
+                return;
+            }
+            rowY += SECTION_H;
+            if (automixExpanded) {
+                if (isInside(mouseX, mouseY, panelX + 6, rowY, SETTINGS_W - 12, COLOR_ROW_H)) {
+                    AutomixSettings.setEnabled(!AutomixSettings.isEnabled());
+                    return;
+                }
+                rowY += COLOR_ROW_H;
+                if (isInside(mouseX, mouseY, panelX + 6, rowY, SETTINGS_W - 12, COLOR_ROW_H)) {
+                    AutomixSettings.cycleOverlapSeconds();
+                    return;
+                }
+                rowY += COLOR_ROW_H;
+                if (isInside(mouseX, mouseY, panelX + 6, rowY, SETTINGS_W - 12, COLOR_ROW_H)) {
+                    AutomixSettings.setSkipIntroEnabled(!AutomixSettings.isSkipIntroEnabled());
+                    return;
+                }
+                rowY += COLOR_ROW_H;
+                if (isInside(mouseX, mouseY, panelX + 6, rowY, SETTINGS_W - 12, COLOR_ROW_H)) {
+                    AutomixSettings.setBeatAlignEnabled(!AutomixSettings.isBeatAlignEnabled());
+                    return;
+                }
+                rowY += COLOR_ROW_H;
+                if (isInside(mouseX, mouseY, panelX + 6, rowY, SETTINGS_W - 12, COLOR_ROW_H)) {
+                    AutomixSettings.setBassSwapEnabled(!AutomixSettings.isBassSwapEnabled());
+                    return;
+                }
+                rowY += COLOR_ROW_H;
+                if (isInside(mouseX, mouseY, panelX + 6, rowY, SETTINGS_W - 12, COLOR_ROW_H)) {
+                    AutomixSettings.setVocalDuckEnabled(!AutomixSettings.isVocalDuckEnabled());
+                    return;
+                }
+                rowY += COLOR_ROW_H;
+                if (isInside(mouseX, mouseY, panelX + 6, rowY, SETTINGS_W - 12, COLOR_ROW_H)) {
+                    AutomixSettings.setTempoLockEnabled(!AutomixSettings.isTempoLockEnabled());
+                    return;
+                }
+                rowY += COLOR_ROW_H;
+                if (isInside(mouseX, mouseY, panelX + 6, rowY, SETTINGS_W - 12, COLOR_ROW_H)) {
+                    AutomixSettings.setPitchMatchEnabled(!AutomixSettings.isPitchMatchEnabled());
+                    return;
+                }
+                rowY += COLOR_ROW_H;
+            }
+
+            if (isInside(mouseX, mouseY, panelX + 5, rowY, SETTINGS_W - 10, SECTION_H)) {
+                storageExpanded = !storageExpanded;
+                settingsScroll = getSettingsLayout().clampScroll(settingsScroll, panelH);
+                return;
+            }
+            rowY += SECTION_H;
+            if (storageExpanded) {
+                if (isInside(mouseX, mouseY, panelX + 6, rowY, SETTINGS_W - 12, COLOR_ROW_H)) {
+                    NCMPlayerConfig.cycleMusicCacheLimit();
+                    MusicAudioCache.enforceLimitAsync();
+                    return;
+                }
+                rowY += COLOR_ROW_H;
+                if (isInside(mouseX, mouseY, panelX + 6, rowY, SETTINGS_W - 12, COLOR_ROW_H)) {
+                    HudSettingsModel.sweepAudioCache();
+                    return;
+                }
+                rowY += COLOR_ROW_H;
+            }
+
+            if (isInside(mouseX, mouseY, panelX + 5, rowY, SETTINGS_W - 10, SECTION_H)) {
                 themeExpanded = !themeExpanded;
                 settingsScroll = getSettingsLayout().clampScroll(settingsScroll, panelH);
                 return;
@@ -1333,7 +1450,7 @@ public class GuiHudEditor extends GuiScreen {
 
     private HudEditorLayout.Metrics getSettingsLayout() {
         return HudEditorLayout.calculate(height, settingsCollapsed, currentExpanded, normalExpanded,
-                islandExpanded, coverExpanded, themeExpanded, SETTINGS_MARGIN,
+                islandExpanded, coverExpanded, automixExpanded, storageExpanded, themeExpanded, SETTINGS_MARGIN,
                 COLLAPSED_SETTINGS_H, SETTINGS_HEADER_H, SECTION_H, COLOR_ROW_H, SLIDER_ROW_H,
                 CURRENT_SLIDERS.length, NORMAL_SLIDERS.length, ISLAND_SLIDERS.length,
                 themeGridHeight(), PICKER_W);

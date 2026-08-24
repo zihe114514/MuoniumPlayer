@@ -73,6 +73,8 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
 
     /** 左上角「A-Z」逐字特效快捷面板；只影响全屏歌词页的两项配置，实时预览。 */
     private final LyricStyleQuickPanel styleQuickPanel = new LyricStyleQuickPanel();
+    /** 「律动词云」样式的渲染器。经典样式下它完全不参与绘制，也不持有任何状态。 */
+    private final CadenzaLyricRenderer cadenzaRenderer = new CadenzaLyricRenderer();
 
     ScrollText stMusicName = new ScrollText(), stArtists = new ScrollText();
     IconWidget playPauseButton = new IconWidget("G", FontManager.music40, 0, 0, 24, 24);
@@ -379,6 +381,8 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
 
     public void onInit() {
         resetLyricStatus();
+        // 换歌重开歌词页时清掉词云的上一行状态，否则会看到上一首的字词退场一次。
+        cadenzaRenderer.reset();
     }
 
     public void close() {
@@ -424,7 +428,7 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
         this.renderControlsPart(mouseX, mouseY, posX, posY, width, height, alpha, snapshot);
         this.renderLyrics(mouseX, mouseY, posX, posY, width, height, dWheel, alpha, snapshot);
         // 快捷面板画在最后：它是浮层，必须盖在封面与歌词之上。
-        this.styleQuickPanel.render(mouseX, mouseY, posX, posY, alpha);
+        this.styleQuickPanel.render(mouseX, mouseY, posX, posY, height, alpha);
         api.getGLStateManager().popMatrix();
     }
 
@@ -442,6 +446,14 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
 
         double lyricsWidth = lyricViewport.width;
         LyricLine displayedCurrentLyric = progressBarDragging ? CloudMusic.findCurrentLyric(overridePlaybackProgress) : CloudMusic.currentLyric;
+
+        // 「律动词云」是一套独立的绘制方式：只画当前行、不滚动、不做 KTV 填涂，
+        // 因此在这里就整段接管，下面经典样式的滚动、模糊、译文与 FBO 合成一律不执行。
+        if (FullscreenLyricStyle.current() == FullscreenLyricStyle.CADENZA) {
+            this.cadenzaRenderer.render(lyricViewport.left, lyricViewport.top,
+                    lyricViewport.width, lyricViewport.height, alpha, songProgress, displayedCurrentLyric);
+            return;
+        }
         this.updateLyricPositions(posY, height, lyricsWidth, displayedCurrentLyric);
 
         List<Runnable> blurRects = new ArrayList<>();

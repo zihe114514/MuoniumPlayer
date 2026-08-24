@@ -19,7 +19,8 @@ public class StencilShader implements SharedConstants {
 
     public void draw(int baseTexture, int stencilTexture, double x, double y) {
 
-        this.stencilProgram.start();
+        // 编译失败的着色器整段跳过，详见 ShaderProgram#start()。
+        if (!this.stencilProgram.start()) return;
 
         api.getGLStateManager().setActiveTexture(GL13.GL_TEXTURE0);
         api.getGLStateManager().bindTexture(stencilTexture);
@@ -44,7 +45,8 @@ public class StencilShader implements SharedConstants {
 
     public void draw(int baseTexture, int stencilTexture, double x, double y, double width, double height) {
 
-        this.stencilProgram.start();
+        // 编译失败的着色器整段跳过，详见 ShaderProgram#start()。
+        if (!this.stencilProgram.start()) return;
 
         api.getGLStateManager().setActiveTexture(GL13.GL_TEXTURE0);
         api.getGLStateManager().bindTexture(stencilTexture);

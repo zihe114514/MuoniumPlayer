@@ -88,6 +88,9 @@ public final class HudSettingsIcons {
     /** 三横线：标题栏的拖动区标记。 */
     public static final String GRIP = "\ue21f";
 
+    public static final String STORAGE = "\ue220";
+    public static final String SWEEP = "\ue221";
+
     /**
      * 满格实心方块，<b>只用于量测，不要画出来</b>。
      *

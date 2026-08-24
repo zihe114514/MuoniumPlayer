@@ -633,38 +633,58 @@ public class GuiHudEditorPro extends GuiScreen {
         return 22 + text + 12;
     }
 
+    /**
+     * 侧边栏每行的高度。
+     *
+     * <p>侧边栏不滚动，行高又原本是常量，所以窗口一矮（GUI 缩放调大时 {@code height} 会很小）
+     * 排在后面的分类就整行画不出来，连点都点不到。这里在放不下时按可用高度均分，
+     * 保证任何面板高度下每个分类都可见可点；行高被压到放不下两行文字时只画标题。</p>
+     */
+    private static int navRowHeight(int navH, int count) {
+        if (count <= 0) return NAV_ROW_H;
+        int available = navH - 12;
+        if (count * NAV_ROW_H <= available) return NAV_ROW_H;
+        return Math.max(18, available / count);
+    }
+
     private void drawNav(CFontRenderer fr, int navX, int navY, int navW, int navH,
                          HudSettingsModel.Category[] categories, int mouseX, int mouseY) {
         drawRoundedRect(navX, navY, navW, navH, 0, NAV_BG);
         boolean compact = navW < 100;
+        int rowH = navRowHeight(navH, categories.length);
+        boolean twoLines = rowH >= 32;
 
         int selected = clampCategory();
-        float targetY = navY + 6 + selected * NAV_ROW_H;
+        float targetY = navY + 6 + selected * rowH;
         if (navIndicator < 0f) navIndicator = targetY;
         navIndicator = Interpolations.interpolate(navIndicator, targetY, 14f);
 
         // 指示器先画，条目图标与文字画在它上面：切分类时看到的是一块背景滑过去。
-        drawRoundedRect(navX + 6, navIndicator, navW - 12, NAV_ROW_H - 4, 9, NAV_SELECTED);
-        drawRoundedRect(navX + 6, navIndicator + 8, 3, NAV_ROW_H - 20, 2, categories[selected].accent);
+        drawRoundedRect(navX + 6, navIndicator, navW - 12, rowH - 4, 9, NAV_SELECTED);
+        drawRoundedRect(navX + 6, navIndicator + Math.max(3, rowH / 4.5),
+                3, Math.max(4, rowH - 20), 2, categories[selected].accent);
 
         for (int index = 0; index < categories.length; index++) {
             HudSettingsModel.Category category = categories[index];
-            int rowY = navY + 6 + index * NAV_ROW_H;
-            if (rowY + NAV_ROW_H > navY + navH) break;
-            boolean hovered = isInside(mouseX, mouseY, navX + 6, rowY, navW - 12, NAV_ROW_H - 4);
+            int rowY = navY + 6 + index * rowH;
+            boolean hovered = isInside(mouseX, mouseY, navX + 6, rowY, navW - 12, rowH - 4);
             float hp = named("nav." + index, hovered && index != selected);
             if (hp > 0.02f) {
-                drawRoundedRect(navX + 6, rowY, navW - 12, NAV_ROW_H - 4, 9, fade(NAV_HOVER, hp));
+                drawRoundedRect(navX + 6, rowY, navW - 12, rowH - 4, 9, fade(NAV_HOVER, hp));
             }
             boolean current = index == selected;
             // 图标替代原来的色点：色点只能表达「这一类是紫色的」，图标能表达「这一类是歌词」。
             double iconCx = compact ? navX + navW / 2.0 : navX + 21;
-            drawIcon(FontManager.settingsIcon32, category.icon, iconCx, rowY + (NAV_ROW_H - 4) / 2.0,
+            drawIcon(FontManager.settingsIcon32, category.icon, iconCx, rowY + (rowH - 4) / 2.0,
                     current ? category.accent : mix(0xFF7E8A9C, category.accent, hp));
             if (compact) continue;
-            drawText(FontManager.pf12bold, category.title, navX + 36, rowY + 9,
-                    current ? TEXT_PRIMARY : mix(TEXT_SECONDARY, TEXT_PRIMARY, hp));
-            drawText(fr, category.entryCount() + " 项", navX + 36, rowY + 21, TEXT_TERTIARY);
+            int titleColor = current ? TEXT_PRIMARY : mix(TEXT_SECONDARY, TEXT_PRIMARY, hp);
+            if (twoLines) {
+                drawText(FontManager.pf12bold, category.title, navX + 36, rowY + 9, titleColor);
+                drawText(fr, category.entryCount() + " 项", navX + 36, rowY + 21, TEXT_TERTIARY);
+            } else {
+                drawText(FontManager.pf12bold, category.title, navX + 36, rowY + (rowH - 4) / 2 - 5, titleColor);
+            }
         }
     }
 
@@ -1228,10 +1248,11 @@ public class GuiHudEditorPro extends GuiScreen {
         int bodyH = panelH - HEADER_H - FOOTER_H;
         HudSettingsModel.Category[] categories = HudSettingsModel.categories();
         if (mouseX < panelX + navW) {
+            // 行高必须和 drawNav 用同一个算法，否则窗口矮的时候点击会落到别的分类上。
+            int navRowH = navRowHeight(bodyH, categories.length);
             for (int index = 0; index < categories.length; index++) {
-                int rowY = bodyY + 6 + index * NAV_ROW_H;
-                if (rowY + NAV_ROW_H > bodyY + bodyH) break;
-                if (isInside(mouseX, mouseY, panelX + 6, rowY, navW - 12, NAV_ROW_H - 4)) {
+                int rowY = bodyY + 6 + index * navRowH;
+                if (isInside(mouseX, mouseY, panelX + 6, rowY, navW - 12, navRowH - 4)) {
                     categoryIndex = index;
                     editingColor = HudSettingsModel.ColorTarget.NONE;
                     clearSearch();

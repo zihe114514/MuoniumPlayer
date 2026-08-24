@@ -13,10 +13,14 @@ public class Uniform1f {
     private float value;
 
     public Uniform1f(ShaderProgram shader, String uniformName) {
-        this.location = GL20.glGetUniformLocation(shader.getProgramId(), uniformName);
+        // 着色器编译失败时 programId 是 -1，拿它去查 uniform 只会刷 GL 错误。
+        this.location = shader.isUsable() ? GL20.glGetUniformLocation(shader.getProgramId(), uniformName) : -1;
     }
 
     public void setValue(float value) {
+        if (this.location < 0) {
+            return;
+        }
 
         if (this.value != value) {
             GL20.glUniform1f(location, value);

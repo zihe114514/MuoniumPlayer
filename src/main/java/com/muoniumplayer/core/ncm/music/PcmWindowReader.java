@@ -1,6 +1,5 @@
 package com.muoniumplayer.core.ncm.music;
 
-import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -26,7 +25,7 @@ import java.io.RandomAccessFile;
  * <p>Every failure path returns {@code null} / an empty window: analysis is optional, and a file this
  * class cannot parse simply means the handover degrades to a plain equal-power crossfade.</p>
  */
-final class PcmWindowReader implements Closeable {
+final class PcmWindowReader implements AnalysisAudio {
 
     private static final int WAVE_FORMAT_PCM = 1;
     private static final int WAVE_FORMAT_IEEE_FLOAT = 3;
@@ -131,7 +130,8 @@ final class PcmWindowReader implements Closeable {
         }
     }
 
-    int sampleRate() {
+    @Override
+    public int sampleRate() {
         return sampleRate;
     }
 
@@ -154,7 +154,8 @@ final class PcmWindowReader implements Closeable {
      * bounds-check twice. Channels are averaged, which is what every measurement here wants: a beat or
      * an envelope is a property of the mix, not of one side of the stereo image.</p>
      */
-    float[] readMono(long startMillis, long lengthMillis) {
+    @Override
+    public float[] readMono(long startMillis, long lengthMillis) {
         if (lengthMillis <= 0L) return new float[0];
         try {
             long capped = Math.min(lengthMillis, MAX_WINDOW_MILLIS);

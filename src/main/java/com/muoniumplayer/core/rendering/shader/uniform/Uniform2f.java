@@ -13,10 +13,13 @@ public class Uniform2f {
     private float value1, value2;
 
     public Uniform2f(ShaderProgram shader, String uniformName) {
-        this.location = GL20.glGetUniformLocation(shader.getProgramId(), uniformName);
+        this.location = shader.isUsable() ? GL20.glGetUniformLocation(shader.getProgramId(), uniformName) : -1;
     }
 
     public void setValue(float value1, float value2) {
+        if (this.location < 0) {
+            return;
+        }
 
         if (this.value1 != value1 || this.value2 != value2) {
             GL20.glUniform2f(location, value1, value2);

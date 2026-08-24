@@ -16,7 +16,8 @@ public class BlendShader {
     public void render() {
 //        api.getGLStateManager().disableAlpha();
 
-        this.blendProgram.start();
+        // 编译失败的着色器整段跳过，详见 ShaderProgram#start()。
+        if (!this.blendProgram.start()) return;
         textureIn.setValue(0);
 
         ShaderProgram.drawQuadFlipped();

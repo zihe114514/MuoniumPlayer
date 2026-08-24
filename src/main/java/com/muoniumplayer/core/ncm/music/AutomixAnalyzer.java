@@ -35,6 +35,66 @@ final class AutomixAnalyzer {
     private static final int OUTRO_HOP = 1024;
     /** The entrance is nicer just before the kick-in than exactly on it. */
     private static final float INTRO_BACKOFF_MILLIS = 200f;
+    /**
+     * Normalised autocorrelation that counts as full confidence in a beat grid. Measured rather than
+     * guessed: four-on-the-floor material lands around .4-.6, a band with a live drummer around .3, and
+     * a pad or a spoken passage below .1. Mapping .35 to 1 therefore puts "there is a beat here" above
+     * the threshold and "this is an outro" below it.
+     */
+    private static final float FULL_CONFIDENCE_CORRELATION = .35f;
+    /**
+     * How well a parabolic fit locates the autocorrelation peak, as a fraction of one lag bin. A tenth of
+     * a bin is the usual rule of thumb for a smooth peak; the resulting relative tempo precision is this
+     * divided by the lag, i.e. better for slow tracks (more hops per beat) than for fast ones.
+     */
+    private static final double PEAK_FIT_PRECISION = .12;
+
+    /**
+     * Block length for the chroma analysis, ~372 ms at 22.05 kHz. The Goertzel bin is then ~2.7 Hz wide,
+     * which still separates adjacent semitones at the bottom of the analysed range (7.8 Hz apart at C3)
+     * while being short enough that a chord change does not smear across the whole window.
+     */
+    private static final int CHROMA_BLOCK = 8_192;
+    /** C3 to B6 in MIDI numbers. Below C3 the bins stop resolving semitones; above B6 there is mostly
+     *  harmonic content of notes already counted. */
+    private static final int CHROMA_LOWEST_MIDI = 48;
+    private static final int CHROMA_HIGHEST_MIDI = 83;
+
+    /**
+     * Krumhansl-Kessler key profiles: the tonal hierarchies measured in the probe-tone experiments,
+     * still the standard template for template-matching key finders.
+     */
+    private static final double[] MAJOR_PROFILE =
+            {6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88};
+    private static final double[] MINOR_PROFILE =
+            {6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17};
+
+    /**
+     * Harmonic distance between two keys, indexed by the interval between their positions on the Camelot
+     * wheel expressed in semitones of their relative major.
+     *
+     * <p>This is the wheel written out. One step around it is a perfect fifth (7 semitones) or fourth
+     * (5), which is what DJs mix on; two steps is a stretch; and a semitone or a tritone apart is the
+     * classic key clash that makes an otherwise clean blend sound broken. A semitone up is a legitimate
+     * <em>sequential</em> energy-boost move, but it is the worst thing two <em>simultaneous</em> tracks can
+     * be, which is the only case here.</p>
+     *
+     * <p>Comparing relative majors rather than literal tonics is deliberate and does double duty. It is
+     * how the wheel is actually defined - A minor and C major share one slot - and it makes the whole
+     * table immune to the one mistake chroma template matching reliably makes: a minor key and its
+     * relative major have the same pitch-class set, so no amount of tuning will separate them, and a
+     * table indexed on the literal tonic would read G major against E minor as four semitones apart
+     * (a clash) when they are the same slot.</p>
+     */
+    private static final double[] WHEEL_PENALTY =
+            {.00, 1.00, .45, .55, .70, .18, .95, .15, .70, .55, .45, 1.00};
+    /**
+     * Surcharge for a major against a minor in the same wheel slot, i.e. a relative pair. Small on
+     * purpose: their scales are identical and only the centre of gravity differs, so it is a colour
+     * difference rather than a collision - and it has to stay below the threshold that triggers a
+     * transposition, because a relative pair is exactly what a misread key looks like.
+     */
+    private static final double MODE_MISMATCH_PENALTY = .12;
 
     private AutomixAnalyzer() {
     }
@@ -44,11 +104,42 @@ final class AutomixAnalyzer {
         final float bpm;
         final float phaseMillis;
         final float barPhaseMillis;
+        /**
+         * How much the grid is worth trusting, 0..1.
+         *
+         * <p>Tempo induction always returns <em>a</em> number: the autocorrelation has a maximum even on
+         * a string pad. Without this the planner would happily quantise a mix-out onto an imaginary bar
+         * line in an outro and claim it was beat matched, which moves the handover by up to two seconds
+         * for no reason. It is also what decides whether the rate budget is spent on tempo (a real beat
+         * to keep locked) or on pitch (no beat, so key agreement is the only thing audible).</p>
+         */
+        final float confidence;
+        /**
+         * The measurement's own relative precision, e.g. {@code .006} for "this tempo is good to about
+         * 0.6 %".
+         *
+         * <p>Tempo comes out of an autocorrelation over whole envelope hops, so its resolution depends on
+         * how many hops long the beat is: a fast track is measured on fewer hops and less precisely. The
+         * planner needs the number because bending a deck by less than the analysis error is not a
+         * correction, it is acting on noise - and two windows of the <em>same</em> track routinely disagree
+         * by a percent, which used to be enough to earn a 1.5 % "tempo lock" on a pair already in sync.</p>
+         */
+        final float tempoTolerance;
 
-        BeatGrid(float bpm, float phaseMillis, float barPhaseMillis) {
+        BeatGrid(float bpm, float phaseMillis, float barPhaseMillis, float confidence) {
+            // Conservative default for callers that did not measure a precision.
+            this(bpm, phaseMillis, barPhaseMillis, confidence, .01f);
+        }
+
+        BeatGrid(float bpm, float phaseMillis, float barPhaseMillis, float confidence,
+                 float tempoTolerance) {
             this.bpm = bpm;
             this.phaseMillis = phaseMillis;
             this.barPhaseMillis = barPhaseMillis;
+            this.confidence = Float.isNaN(confidence) ? 0f
+                    : Math.max(0f, Math.min(1f, confidence));
+            this.tempoTolerance = Float.isNaN(tempoTolerance) ? .01f
+                    : Math.max(.002f, Math.min(.05f, tempoTolerance));
         }
 
         float beatPeriodMillis() {
@@ -60,6 +151,28 @@ final class AutomixAnalyzer {
             return 4f * 60_000f / bpm;
         }
     }
+
+    /** Estimated key: tonic pitch class (0 = C … 11 = B), mode, and 0..1 confidence. */
+    static final class KeyEstimate {
+        final int tonic;
+        final boolean major;
+        final float confidence;
+
+        KeyEstimate(int tonic, boolean major, float confidence) {
+            this.tonic = ((tonic % 12) + 12) % 12;
+            this.major = major;
+            this.confidence = Float.isNaN(confidence) ? 0f
+                    : Math.max(0f, Math.min(1f, confidence));
+        }
+
+        /** e.g. {@code "F#m"}. */
+        String label() {
+            return NOTE_NAMES[this.tonic] + (this.major ? "" : "m");
+        }
+    }
+
+    private static final String[] NOTE_NAMES =
+            {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 
     /**
      * Integrated K-weighted loudness of the window in LUFS, or {@link Float#NaN} when it cannot be
@@ -247,6 +360,8 @@ final class AutomixAnalyzer {
         if (maxLag <= minLag) return null;
 
         // 2. Autocorrelation across the tempo lag range.
+        int lagCount = maxLag - minLag + 1;
+        double[] scores = new double[lagCount];
         int bestLag = minLag;
         double bestScore = Double.NEGATIVE_INFINITY;
         for (int lag = minLag; lag <= maxLag; lag++) {
@@ -256,12 +371,60 @@ final class AutomixAnalyzer {
             }
             // A slight bias toward faster tempi cancels the natural falloff at long lags.
             correlation *= 1.0 + 0.0005 * (maxLag - lag);
+            scores[lag - minLag] = correlation;
             if (correlation > bestScore) {
                 bestScore = correlation;
                 bestLag = lag;
             }
         }
-        float bpm = 60f * envelopeRate / bestLag;
+
+        // 2a. Sub-hop refinement, by fitting a parabola through the winning lag and its two neighbours.
+        //
+        //     Without this the tempo is quantised to whole envelope hops, and that quantisation is
+        //     coarse enough to matter: at 22.05 kHz a hop is 23.2 ms, so a 120 BPM beat is 21.5 hops and
+        //     rounds to either 117.5 or 123.1 BPM. Two windows of the *same* track can therefore land on
+        //     opposite sides and look 4.8 % apart - which the tempo lock would then faithfully "correct"
+        //     by bending a deck 5 % for no reason. Interpolating the peak brings the error under half a
+        //     percent, which is what makes a tempo lock worth applying at all.
+        double refinedLag = bestLag;
+        int peak = bestLag - minLag;
+        if (peak > 0 && peak < lagCount - 1) {
+            double left = scores[peak - 1];
+            double centre = scores[peak];
+            double right = scores[peak + 1];
+            double curvature = left - 2.0 * centre + right;
+            // Negative curvature means it really is a maximum; anything else is a plateau or noise and
+            // the integer lag is kept.
+            if (curvature < -1e-12) {
+                double delta = .5 * (left - right) / curvature;
+                if (delta > .5) delta = .5;
+                if (delta < -.5) delta = -.5;
+                refinedLag = bestLag + delta;
+            }
+        }
+        if (refinedLag < 1.0) refinedLag = 1.0;
+        float bpm = (float) (60.0 * envelopeRate / refinedLag);
+        if (bpm < MIN_BPM) bpm = MIN_BPM;
+        if (bpm > MAX_BPM) bpm = MAX_BPM;
+
+        // 2b. Confidence: the *normalised* autocorrelation at the winning lag. The raw score above is
+        //     not usable for this - it is biased by the fast-tempo weighting and scales with the window
+        //     energy. Normalising by the energy of the two overlapping halves separately also removes
+        //     the systematic penalty long lags would otherwise take for having fewer terms.
+        double product = 0.0;
+        double energyLate = 0.0;
+        double energyEarly = 0.0;
+        for (int hop = bestLag; hop < hops; hop++) {
+            double late = onset[hop];
+            double early = onset[hop - bestLag];
+            product += late * early;
+            energyLate += late * late;
+            energyEarly += early * early;
+        }
+        double normaliser = Math.sqrt(energyLate * energyEarly);
+        double normalised = normaliser > 1e-12 ? product / normaliser : 0.0;
+        float confidence = (float) Math.max(0.0,
+                Math.min(1.0, normalised / FULL_CONFIDENCE_CORRELATION));
 
         // 3. Beat phase: the pulse-train offset with the highest onset sum.
         int bestOffset = 0;
@@ -284,7 +447,8 @@ final class AutomixAnalyzer {
         //     not an arbitrary point inside a beat. Stepping by a fraction of a beat here — as is easy
         //     to do by accident — returns offsets that are not on the grid at all.
         int barLag = bestLag * 4;
-        if (barLag >= hops) return new BeatGrid(bpm, phaseMillis, phaseMillis);
+        float tolerance = (float) (PEAK_FIT_PRECISION / refinedLag);
+        if (barLag >= hops) return new BeatGrid(bpm, phaseMillis, phaseMillis, confidence, tolerance);
 
         float bestBarSum = Float.NEGATIVE_INFINITY;
         int bestBarOffset = bestOffset;
@@ -300,7 +464,7 @@ final class AutomixAnalyzer {
                 bestBarOffset = offset;
             }
         }
-        return new BeatGrid(bpm, phaseMillis, bestBarOffset * millisPerHop);
+        return new BeatGrid(bpm, phaseMillis, bestBarOffset * millisPerHop, confidence, tolerance);
     }
 
     /**
@@ -457,6 +621,176 @@ final class AutomixAnalyzer {
             if (distance < bestDistance) {
                 bestDistance = distance;
                 best = candidate;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Twelve-bin chroma (pitch class) profile of the window, normalised to unit sum.
+     *
+     * <p>Computed with a bank of Goertzel resonators rather than an FFT: only 36 frequencies are wanted,
+     * one per semitone from C3 to B6, and a Goertzel costs one multiply-add per sample per frequency
+     * with no transform, no windowing decisions and no bin-to-note interpolation. Magnitudes are summed
+     * rather than powers, because in the power domain one loud bass note buries the entire chord above
+     * it and the profile stops describing the harmony.</p>
+     *
+     * @return the profile, or {@code null} when the window is too short or carries no tonal energy
+     */
+    static float[] chroma(float[] mono, int sampleRate) {
+        if (mono == null || sampleRate <= 0) return null;
+        int block = Math.min(CHROMA_BLOCK, mono.length);
+        if (block < 2_048) return null;
+        int blocks = mono.length / block;
+        if (blocks < 1) return null;
+
+        int notes = CHROMA_HIGHEST_MIDI - CHROMA_LOWEST_MIDI + 1;
+        double[] coefficients = new double[notes];
+        double nyquistGuard = sampleRate * .45;
+        for (int note = 0; note < notes; note++) {
+            double frequency = 440.0 * Math.pow(2.0, (CHROMA_LOWEST_MIDI + note - 69) / 12.0);
+            coefficients[note] = frequency >= nyquistGuard
+                    ? Double.NaN
+                    : 2.0 * Math.cos(2.0 * Math.PI * frequency / sampleRate);
+        }
+
+        float[] chroma = new float[12];
+        double total = 0.0;
+        for (int index = 0; index < blocks; index++) {
+            int base = index * block;
+            for (int note = 0; note < notes; note++) {
+                double coefficient = coefficients[note];
+                if (Double.isNaN(coefficient)) continue;
+                double s1 = 0.0;
+                double s2 = 0.0;
+                for (int n = 0; n < block; n++) {
+                    double s = mono[base + n] + coefficient * s1 - s2;
+                    s2 = s1;
+                    s1 = s;
+                }
+                double power = s2 * s2 + s1 * s1 - coefficient * s1 * s2;
+                if (Double.isNaN(power) || power <= 0.0) continue;
+                float magnitude = (float) (Math.sqrt(power) / block);
+                chroma[(CHROMA_LOWEST_MIDI + note) % 12] += magnitude;
+                total += magnitude;
+            }
+        }
+        if (total < 1e-9) return null;
+        for (int bin = 0; bin < 12; bin++) {
+            chroma[bin] = (float) (chroma[bin] / total);
+        }
+        return chroma;
+    }
+
+    /**
+     * Estimates the key of the window by correlating its chroma profile against the 24 rotations of the
+     * Krumhansl-Kessler major and minor templates.
+     *
+     * <p>The confidence deliberately needs two things at once: a high correlation with the winner
+     * <em>and</em> a gap to the runner-up. A window that fits C major and G major almost equally well has
+     * not identified a key, it has identified a diatonic set, and transposing a track on that basis is
+     * how a "harmonic" mix ends up a semitone wrong.</p>
+     *
+     * @return the estimate, or {@code null} when no key could be measured
+     */
+    static KeyEstimate analyzeKey(float[] mono, int sampleRate) {
+        float[] chroma = chroma(mono, sampleRate);
+        if (chroma == null) return null;
+
+        double best = -2.0;
+        double runnerUp = -2.0;
+        int bestTonic = 0;
+        boolean bestMajor = true;
+        for (int tonic = 0; tonic < 12; tonic++) {
+            for (int mode = 0; mode < 2; mode++) {
+                double score = correlateProfile(chroma, mode == 0 ? MAJOR_PROFILE : MINOR_PROFILE, tonic);
+                if (score > best) {
+                    runnerUp = best;
+                    best = score;
+                    bestTonic = tonic;
+                    bestMajor = mode == 0;
+                } else if (score > runnerUp) {
+                    runnerUp = score;
+                }
+            }
+        }
+        if (best <= 0.0) return null;
+
+        double margin = Math.max(0.0, best - runnerUp);
+        double confidence = Math.min(1.0, best / .55) * Math.min(1.0, margin / .08);
+        return new KeyEstimate(bestTonic, bestMajor, (float) confidence);
+    }
+
+    /** Pearson correlation of the chroma against a template rotated so its tonic sits on {@code rotation}. */
+    private static double correlateProfile(float[] chroma, double[] profile, int rotation) {
+        double meanChroma = 0.0;
+        double meanProfile = 0.0;
+        for (int bin = 0; bin < 12; bin++) {
+            meanChroma += chroma[bin];
+            meanProfile += profile[bin];
+        }
+        meanChroma /= 12.0;
+        meanProfile /= 12.0;
+
+        double covariance = 0.0;
+        double varianceChroma = 0.0;
+        double varianceProfile = 0.0;
+        for (int degree = 0; degree < 12; degree++) {
+            double a = chroma[(degree + rotation) % 12] - meanChroma;
+            double b = profile[degree] - meanProfile;
+            covariance += a * b;
+            varianceChroma += a * a;
+            varianceProfile += b * b;
+        }
+        double denominator = Math.sqrt(varianceChroma * varianceProfile);
+        return denominator > 1e-12 ? covariance / denominator : 0.0;
+    }
+
+    /**
+     * Harmonic penalty in [0,1] for hearing {@code incoming} on top of {@code outgoing} after the
+     * outgoing track has been transposed by {@code semitoneShift}. 0 is "these are the same key",
+     * 1 is "a semitone apart", which is the worst thing two simultaneous tracks can be.
+     *
+     * <p>An unknown key on either side returns a neutral .5 rather than 0: "no information" must not be
+     * mistaken for "measured to be compatible", or every unanalysable pair would look like a perfect
+     * harmonic match and earn itself the longest possible overlap.</p>
+     */
+    static float harmonicPenalty(KeyEstimate outgoing, KeyEstimate incoming, int semitoneShift) {
+        if (outgoing == null || incoming == null) return .5f;
+        int from = ((relativeMajorTonic(outgoing) + semitoneShift) % 12 + 12) % 12;
+        int to = relativeMajorTonic(incoming);
+        int interval = ((to - from) % 12 + 12) % 12;
+        double penalty = WHEEL_PENALTY[interval];
+        if (outgoing.major != incoming.major) penalty += MODE_MISMATCH_PENALTY;
+        return (float) Math.min(1.0, penalty);
+    }
+
+    /** The wheel slot: a minor key sits in the same slot as the major a minor third above it. */
+    private static int relativeMajorTonic(KeyEstimate key) {
+        return key.major ? key.tonic : (key.tonic + 3) % 12;
+    }
+
+    /**
+     * The whole-semitone transposition of {@code outgoing} inside ±{@code maxShift} that agrees best
+     * with {@code incoming}.
+     *
+     * <p>Ties go to 0: bending a deck that is on its way out is only worth doing when it buys a real
+     * improvement. The caller also has to check that the improvement is worth the pitch move at all -
+     * this method answers "which shift is best", not "should there be one".</p>
+     */
+    static int bestSemitoneShift(KeyEstimate outgoing, KeyEstimate incoming, int maxShift) {
+        if (outgoing == null || incoming == null) return 0;
+        int limit = Math.max(0, Math.min(6, maxShift));
+        int best = 0;
+        float bestPenalty = harmonicPenalty(outgoing, incoming, 0);
+        for (int shift = -limit; shift <= limit; shift++) {
+            if (shift == 0) continue;
+            float penalty = harmonicPenalty(outgoing, incoming, shift);
+            // Strictly better, and the closer shift wins a tie between +1 and -1.
+            if (penalty < bestPenalty - 1e-4f
+                    || (Math.abs(penalty - bestPenalty) <= 1e-4f && Math.abs(shift) < Math.abs(best))) {
+                bestPenalty = penalty;
+                best = shift;
             }
         }
         return best;

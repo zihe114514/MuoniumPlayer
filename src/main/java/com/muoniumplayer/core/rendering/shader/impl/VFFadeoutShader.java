@@ -30,7 +30,8 @@ public class VFFadeoutShader implements SharedConstants {
             height = j - y;
         }
 
-        this.program.start();
+        // 编译失败的着色器整段跳过，详见 ShaderProgram#start()。
+        if (!this.program.start()) return;
 
         this.textureIn.setValue(0);
         this.u_size.setValue(width, height);

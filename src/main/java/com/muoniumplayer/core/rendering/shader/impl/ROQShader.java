@@ -34,7 +34,8 @@ public class ROQShader implements SharedConstants {
         }
 
         int programId = this.program.getProgramId();
-        this.program.start();
+        // 编译失败的着色器整段跳过，详见 ShaderProgram#start()。
+        if (!this.program.start()) return;
         
         this.u_size.setValue(width, height);
         this.u_radius.setValue(radius - 2f);

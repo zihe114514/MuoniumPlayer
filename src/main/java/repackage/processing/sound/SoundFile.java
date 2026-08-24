@@ -21,9 +21,50 @@ public class SoundFile extends AudioSample {
 		super();
 
 		// load WAV or AIF using JSyn
-		this.sample = SampleLoader.loadStreamedFloatSample(new File(path));
+		// 再包一层「变速不变调」。tempo=1 时是真直通（readDouble 直接转发内层），
+		// 所以正常听歌那条路和没有这层时逐采样一致；只有 automix 交接真的要变速时才会接管。
+		// 包不了（声道数不对、曲子太短）时 wrap() 原样还回来，链路完全不变。
+		this.sample = WsolaStretchSample.wrap(SampleLoader.loadStreamedFloatSample(new File(path)));
 
 		this.initiatePlayer();
+	}
+
+	/**
+	 * 变速但不变音高。
+	 *
+	 * <p>{@code tempo} 是 SoundTouch 语义：{@code > 1} 更快更短。和 {@link #rate(float)} 的区别是
+	 * 后者靠重采样，速度和音高一起变。</p>
+	 *
+	 * @return {@code true} 表示时间伸缩层接住了这次请求，调用方<b>不要</b>再动 {@link #rate(float)}；
+	 *         {@code false} 表示这首歌没有伸缩层（见 {@link WsolaStretchSample#wrap}），
+	 *         调用方需要退回重采样
+	 */
+	public boolean timeStretch(float tempo) {
+		return this.sample instanceof WsolaStretchSample
+				&& ((WsolaStretchSample) this.sample).setTempo(tempo);
+	}
+
+	/** 有没有时间伸缩层可用。 */
+	public boolean canTimeStretch() {
+		return this.sample instanceof WsolaStretchSample;
+	}
+
+	/** 时间伸缩层当前是否真的在跑（而不是直通）。 */
+	public boolean isTimeStretching() {
+		return this.sample instanceof WsolaStretchSample
+				&& ((WsolaStretchSample) this.sample).isEngaged();
+	}
+
+	/**
+	 * 定位之后把伸缩层的输出时间轴重新对齐到源。
+	 *
+	 * <p>不调的话，跳转后 WSOLA 会从上一次停下的源位置继续长，而读头的下标已经跳到别处，
+	 * 于是听到的是跳转前那一段。</p>
+	 */
+	public void resyncTimeStretch() {
+		if (this.sample instanceof WsolaStretchSample) {
+			((WsolaStretchSample) this.sample).resync();
+		}
 	}
 
 	// Below are just duplicated methods from the AudioSample superclass which

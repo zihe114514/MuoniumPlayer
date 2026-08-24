@@ -17,6 +17,8 @@ public final class AnimatedCoverTexture extends DynamicTexture {
     private final List<int[]> frames;
     private final List<Long> frameDurations;
     private int currentFrame;
+    /** 当前是否在倒放。乒乓循环用一个方向标志表达，不需要把序列展开成两倍长度的帧表。 */
+    private boolean rewinding;
     private long nextFrameAt;
     /** 换帧过程中的上传会再次绑定纹理,必须挡住由此产生的重入。 */
     private boolean uploadingFrame;
@@ -80,12 +82,21 @@ public final class AnimatedCoverTexture extends DynamicTexture {
         if (now < nextFrameAt) {
             return;
         }
-        int next = (currentFrame + 1) % localFrames.size();
+        int size = localFrames.size();
+        boolean nextRewinding = nextRewinding(currentFrame, size, rewinding);
+        // nextRewinding 的契约保证这一步不会越界：往回走时 currentFrame > 0，往前走时 currentFrame + 1 < size。
+        int next = nextRewinding ? currentFrame - 1 : currentFrame + 1;
+        if (next < 0 || next >= size) {
+            // 只可能来自不该发生的状态；从头正放而不是抛异常，动态封面不值得为此断掉。
+            next = 0;
+            nextRewinding = false;
+        }
         int[] pixels = localFrames.get(next);
         if (pixels.length != dynamicTextureData.length) {
             return;
         }
         currentFrame = next;
+        rewinding = nextRewinding;
         nextFrameAt = now + localDurations.get(next);
         System.arraycopy(pixels, 0, dynamicTextureData, 0, dynamicTextureData.length);
         uploadingFrame = true;
@@ -94,6 +105,24 @@ public final class AnimatedCoverTexture extends DynamicTexture {
         } finally {
             uploadingFrame = false;
         }
+    }
+
+    /**
+     * 乒乓循环里下一步的方向：{@code true} 表示接下来往回走。
+     *
+     * <p>播放顺序是 {@code 0,1,…,N-1,N-2,…,1,0,1,…}，两个端点各只出现一次。朴素写法容易在端点
+     * 把同一帧连播两次（{@code …,N-1,N-1,…}），看起来是动画卡了一下，所以方向在<b>到达</b>端点的
+     * 那一步就翻转，而不是等到试图越过端点时才翻。</p>
+     *
+     * <p>调用方据此直接 ±1 取下一帧，因此这里必须保证：返回 {@code true} 时 {@code current > 0}，
+     * 返回 {@code false} 时 {@code current + 1 < size}。{@code size >= 2} 是前提，单帧纹理根本不会
+     * 走到换帧逻辑。</p>
+     */
+    static boolean nextRewinding(int current, int size, boolean rewinding) {
+        if (size < 2) return false;
+        if (current <= 0) return false;
+        if (current >= size - 1) return true;
+        return rewinding;
     }
 
     private static BufferedImage normalize(BufferedImage source, int width, int height) {

@@ -81,6 +81,10 @@ public interface SharedRenderingConstants {
         Shaders.RQG_SHADER.draw(x, y, width, height, radius, left, left, right, right);
     }
 
+    /**
+     * 竖向渐变。传进来的颜色<b>包括 alpha</b>：{@code rqg.frag} 会对四个角做双线性插值，
+     * 最终透明度是插出来的 alpha 乘上这一次绘制的全局 alpha。
+     */
     default void roundedRectGradientVertical(double x, double y, double width, double height, double radius, Color top, Color bottom) {
         Shaders.RQG_SHADER.draw(x, y, width, height, radius, bottom, top, bottom, top);
     }
@@ -95,8 +99,16 @@ public interface SharedRenderingConstants {
         Shaders.RQG_SHADER.draw(x, y, width, height, radius, bottomLeft, mixedColor, mixedColor, topRight);
     }
 
+    /**
+     * 两个颜色的等权中间色，供 {@link #drawGradientCornerLR} / {@link #drawGradientCornerRL}
+     * 补出对角的两个角。
+     *
+     * <p>alpha 也要一起平均。三参数的 {@code Color} 构造器给出的是不透明色，于是两个半透明角之间
+     * 会补出一个不透明的角，对角渐变上会出现一条突然变实的亮带。</p>
+     */
     default Color evenAdd(Color a, Color b) {
-        return new Color(a.getRed() / 2 + b.getRed() / 2, a.getGreen() / 2 + b.getGreen() / 2, a.getBlue() / 2 + b.getBlue() / 2);
+        return new Color(a.getRed() / 2 + b.getRed() / 2, a.getGreen() / 2 + b.getGreen() / 2,
+                a.getBlue() / 2 + b.getBlue() / 2, a.getAlpha() / 2 + b.getAlpha() / 2);
     }
 
     default void scaleAtPos(double posX, double posY, double scale) {

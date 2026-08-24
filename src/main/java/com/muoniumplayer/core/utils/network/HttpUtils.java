@@ -153,7 +153,9 @@ public class HttpUtils {
         // 添加参数
         if (params != null) {
             conn.setRequestProperty("Content-Length", String.valueOf(params.length()));
-            writer = new OutputStreamWriter(conn.getOutputStream());
+            // 请求体里有中文（搜索关键词、歌单名）。不写死 UTF-8 会按平台默认字符集编码，
+            // 中文 Windows 客户端上就是 GBK，服务端收到乱码。
+            writer = new OutputStreamWriter(conn.getOutputStream(), StandardCharsets.UTF_8);
             writer.write(params);
             writer.flush();
         }

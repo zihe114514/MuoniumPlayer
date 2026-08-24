@@ -16,6 +16,7 @@ import com.muoniumplayer.core.rendering.texture.ITextureObject;
 import com.muoniumplayer.core.rendering.texture.Textures;
 import com.muoniumplayer.core.utils.Location;
 import com.muoniumplayer.core.utils.network.HttpUtils;
+import com.muoniumplayer.core.utils.other.multithreading.BackgroundWork;
 import com.muoniumplayer.core.utils.other.multithreading.MultiThreadingUtil;
 
 import com.muoniumplayer.core.settings.HudConfig;
@@ -117,7 +118,9 @@ final class MusicCoverService {
             return;
         }
 
-        MultiThreadingUtil.runAsync(() -> {
+        // 低优先级池：这条链要下载一段视频再用 ffmpeg 抽成几十张 256×256 的 PNG，是纯装饰性开销，
+        // 没有任何理由和渲染线程争 CPU。
+        BackgroundWork.submit(() -> {
             try {
                 JsonObject response = CloudMusicApi.songDynamicCover(music.getId()).toJsonObject();
                 String imageUrl = findDynamicCoverUrl(response);
@@ -389,7 +392,8 @@ final class MusicCoverService {
 
     private static void loadCoverTextures(BufferedImage coverImage, Location musicCover, Location musicCoverBlur) {
         Textures.loadTexture(musicCover, coverImage);
-        MultiThreadingUtil.runAsync(() -> {
+        // 低优先级池：31 半径的高斯模糊是纯 CPU 卷积，一张 320×320 的封面就能吃满一个核几十毫秒。
+        BackgroundWork.submit(() -> {
             BufferedImage inputImage = new BufferedImage(coverImage.getWidth(), coverImage.getHeight(),
                     BufferedImage.TYPE_INT_ARGB);
             inputImage.setRGB(0, 0, coverImage.getWidth(), coverImage.getHeight(),

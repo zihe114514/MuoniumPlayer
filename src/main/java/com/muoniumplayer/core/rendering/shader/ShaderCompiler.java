@@ -5,10 +5,8 @@ import org.lwjgl.opengl.GL20;
 import com.muoniumplayer.core.interfaces.SharedConstants;
 import com.muoniumplayer.core.utils.Location;
 
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 
 public class ShaderCompiler implements SharedConstants {
 
@@ -16,8 +14,9 @@ public class ShaderCompiler implements SharedConstants {
         final String fragmentSource = getShaderResource(fragment);
         final String vertexSource = getShaderResource(vertex);
 
-        if (fragment == null || vertex == null) {
-            System.out.println("An error occurred whilst creating shader");
+        // 以前这里判的是文件名而不是读出来的源码，资源缺失/读失败会带着 null 一路走到 glShaderSource。
+        if (fragmentSource == null || vertexSource == null) {
+            System.err.println("[MuoniumPlayer] Missing shader source: fragment=" + fragment + ", vertex=" + vertex);
             return -1;
         }
 
@@ -29,8 +28,8 @@ public class ShaderCompiler implements SharedConstants {
         GL20.glCompileShader(fragmentId);
         GL20.glCompileShader(vertexId);
 
-        if (!checkIfCompiled(fragmentId)) return -1;
-        if (!checkIfCompiled(vertexId)) return -1;
+        if (!checkIfCompiled(fragmentId, fragment)) return -1;
+        if (!checkIfCompiled(vertexId, vertex)) return -1;
 
         final int programId = GL20.glCreateProgram();
         GL20.glAttachShader(programId, fragmentId);
@@ -43,36 +42,39 @@ public class ShaderCompiler implements SharedConstants {
         return programId;
     }
 
-    private static boolean checkIfCompiled(final int shaderId) {
+    private static boolean checkIfCompiled(final int shaderId, final String resource) {
         final boolean compiled = GL20.glGetShaderi(shaderId, GL20.GL_COMPILE_STATUS) == GL11.GL_TRUE;
         if (compiled) return true;
 
         final String shaderLog = GL20.glGetShaderInfoLog(shaderId, 8192);
-        System.out.println("\nError while compiling shader: ");
-        System.out.println("-------------------------------");
-        System.out.println(shaderLog);
+        System.err.println("\n[MuoniumPlayer] Error while compiling shader: " + resource);
+        System.err.println("-------------------------------");
+        System.err.println(shaderLog);
         return false;
     }
 
+    /**
+     * 读取并消毒着色器源码。
+     *
+     * <p>必须固定 UTF-8 且过滤非 ASCII，原因见 {@link ShaderSource}：默认字符集在中文 Windows 上是
+     * GBK，而 LWJGL 2 上传源码时只取每个 char 的低字节，乱码能在注释中间插出一个换行来。</p>
+     */
     public static String getShaderResource(final String resource) {
+        InputStream inputStream = null;
         try {
-            final InputStream inputStream = Location.of("/muonium/shaders/" + resource).getResourceStream();
-            final InputStreamReader inputStreamReader = new InputStreamReader(inputStream);
-            final BufferedReader bufferedReader = new BufferedReader(inputStreamReader);
-            String source = "";
-
-            try {
-                for (String s; (s = bufferedReader.readLine()) != null; source += s + System.lineSeparator()) ;
-            } catch (final IOException ignored) {
-            }
-
-            inputStream.close();
-
-            return source;
-        } catch (final IOException | NullPointerException e) {
-            System.out.println("An error occurred while getting a shader resource");
+            inputStream = Location.of("/muonium/shaders/" + resource).getResourceStream();
+            return ShaderSource.read(inputStream);
+        } catch (final RuntimeException | IOException e) {
+            System.err.println("[MuoniumPlayer] An error occurred while getting shader resource " + resource);
             e.printStackTrace();
             return null;
+        } finally {
+            if (inputStream != null) {
+                try {
+                    inputStream.close();
+                } catch (final IOException ignored) {
+                }
+            }
         }
     }
 

@@ -34,6 +34,32 @@ public final class AutomixSettings {
     public static final float BASS_ENTRY_CUT_DB = -12f;
 
     /**
+     * Bounds on the playback rate the outgoing deck may be bent to. Shared by the planner (which picks
+     * the target) and the plan (which schedules the ramp and the phase correction on top of it), so the
+     * two can never disagree about what is reachable.
+     *
+     * <p>±6 % is not arbitrary: one semitone is 2^(1/12) = +5.946 %, so the budget is exactly wide
+     * enough for a whole-semitone transposition and no wider. That is what makes the key snap either
+     * land in tune or not happen at all - a rate between two semitones is audibly out of tune, which is
+     * worse than leaving the track alone.</p>
+     */
+    public static final float MIN_PLAYBACK_RATE = .94f;
+    public static final float MAX_PLAYBACK_RATE = 1.06f;
+    /** One semitone as a playback-rate factor. */
+    public static final float SEMITONE_RATIO = 1.0594630943592953f;
+
+    /**
+     * How hard the incoming deck's vocal band is cancelled while it fades in.
+     *
+     * <p>Two lead vocals on top of each other is the one artefact a listener can name, and unlike two
+     * kick drums it cannot be fixed by a shelf: voices live in the same band as everything else.
+     * Cancelling the band-limited centre of the arriving track lets it enter as an instrumental bed and
+     * only become a song once the outgoing vocal is gone. 1 would be full cancellation, which also eats
+     * the snare and the bass DI; a little over half keeps the entry musical.</p>
+     */
+    public static final float VOCAL_DUCK_DEPTH = .62f;
+
+    /**
      * How early the next track starts being resolved/downloaded/decoded, on top of the overlap.
      * Decoding a normal track costs a few seconds; a fragmented-MP4 one can cost more, so the arm
      * window is generous. An arm that is not ready in time simply degrades to the ordinary switch.
@@ -55,6 +81,9 @@ public final class AutomixSettings {
     private static boolean beatAlign = true;
     private static boolean bassSwap = true;
     private static boolean tempoLock = true;
+    private static boolean vocalDuck = true;
+    private static boolean pitchMatch = true;
+    private static boolean skipIntro = true;
     private static float overlapSeconds = DEFAULT_OVERLAP_SECONDS;
 
     private AutomixSettings() {
@@ -145,6 +174,79 @@ public final class AutomixSettings {
         }
     }
 
+    /**
+     * Whether the arriving deck's vocal band is cancelled while it fades in, and restored once it owns
+     * the mix.
+     *
+     * <p>Off by preference rather than by safety: the cancellation is a band-limited centre subtraction,
+     * so on a mix whose lead is not centred it takes out less than it should, and on a mono file it
+     * degrades to a mid-band dip. Both are still an improvement over two vocals colliding, but a user
+     * who wants the plain equal-power blend can have it.</p>
+     */
+    public static boolean isVocalDuckEnabled() {
+        load();
+        synchronized (LOCK) {
+            return vocalDuck;
+        }
+    }
+
+    public static void setVocalDuckEnabled(boolean value) {
+        load();
+        synchronized (LOCK) {
+            if (vocalDuck == value) return;
+            vocalDuck = value;
+            saveLocked();
+        }
+    }
+
+    /**
+     * Whether the outgoing deck may be transposed by a whole semitone to make the two keys agree.
+     *
+     * <p>Only ever used where the tempo lock has nothing to do - a mix-out that lands in an outro or a
+     * pad, i.e. where the beat grid is too weak to be worth locking. Both cannot be served at once:
+     * JSyn's rate port moves tempo and pitch together, and the whole ±6 % budget is one semitone.</p>
+     */
+    public static boolean isPitchMatchEnabled() {
+        load();
+        synchronized (LOCK) {
+            return pitchMatch;
+        }
+    }
+
+    public static void setPitchMatchEnabled(boolean value) {
+        load();
+        synchronized (LOCK) {
+            if (pitchMatch == value) return;
+            pitchMatch = value;
+            saveLocked();
+        }
+    }
+
+    /**
+     * 交接时是否跳过新歌的前奏，直接从主体进来。
+     *
+     * <p>关掉之后新歌一律从第 0 毫秒开始，也就是回到「淡入整首歌的开头」这一最朴素的行为。前奏是不是
+     * 「废话」终究是主观判断：铺垫式的长前奏对一部分听众正是这首歌的一半，被自动切掉会觉得歌被剪了。</p>
+     *
+     * <p>注意这只改变<b>从哪里开始出声</b>，不影响分析：前奏位置照样要测出来，节拍与调性必须在有内容的
+     * 段落上分析，否则安静的前奏会把 BPM 和调性一起测废，连节奏锁定与和声判断都跟着失效。</p>
+     */
+    public static boolean isSkipIntroEnabled() {
+        load();
+        synchronized (LOCK) {
+            return skipIntro;
+        }
+    }
+
+    public static void setSkipIntroEnabled(boolean value) {
+        load();
+        synchronized (LOCK) {
+            if (skipIntro == value) return;
+            skipIntro = value;
+            saveLocked();
+        }
+    }
+
     public static float getOverlapSeconds() {
         load();
         synchronized (LOCK) {
@@ -164,6 +266,32 @@ public final class AutomixSettings {
             overlapSeconds = clamped;
             saveLocked();
         }
+    }
+
+    /**
+     * 重叠时长的可选档位。设置界面用点击循环而不是滑块：这一项的有效范围只有 1.5~10 秒，
+     * 而且用户真正会选的就是这几个整数值，一格一格拖没有意义。
+     */
+    private static final float[] OVERLAP_PRESETS = {1.5f, 2f, 3f, 4f, 6f, 8f, 10f};
+
+    /** 当前重叠时长的显示文案。 */
+    public static String getOverlapLabel() {
+        float seconds = getOverlapSeconds();
+        if (Math.abs(seconds - Math.round(seconds)) < .05f) {
+            return Math.round(seconds) + " 秒";
+        }
+        return String.format("%.1f 秒", seconds);
+    }
+
+    /** 切到下一个重叠档位，走到末尾回到第一个。 */
+    public static void cycleOverlapSeconds() {
+        float current = getOverlapSeconds();
+        int index = 0;
+        // 找当前值所在的档位；配置文件里手填的中间值会落到「下一个比它大的档位」。
+        for (int i = 0; i < OVERLAP_PRESETS.length; i++) {
+            if (current >= OVERLAP_PRESETS[i] - .05f) index = i;
+        }
+        setOverlapSeconds(OVERLAP_PRESETS[(index + 1) % OVERLAP_PRESETS.length]);
     }
 
     private static float clamp(float value) {
@@ -192,6 +320,15 @@ public final class AutomixSettings {
                 if (root.has("tempoLock") && !root.get("tempoLock").isJsonNull()) {
                     tempoLock = root.get("tempoLock").getAsBoolean();
                 }
+                if (root.has("vocalDuck") && !root.get("vocalDuck").isJsonNull()) {
+                    vocalDuck = root.get("vocalDuck").getAsBoolean();
+                }
+                if (root.has("skipIntro") && !root.get("skipIntro").isJsonNull()) {
+                    skipIntro = root.get("skipIntro").getAsBoolean();
+                }
+                if (root.has("pitchMatch") && !root.get("pitchMatch").isJsonNull()) {
+                    pitchMatch = root.get("pitchMatch").getAsBoolean();
+                }
                 if (root.has("overlapSeconds") && !root.get("overlapSeconds").isJsonNull()) {
                     overlapSeconds = clamp(root.get("overlapSeconds").getAsFloat());
                 }
@@ -210,6 +347,9 @@ public final class AutomixSettings {
             root.addProperty("beatAlign", beatAlign);
             root.addProperty("bassSwap", bassSwap);
             root.addProperty("tempoLock", tempoLock);
+            root.addProperty("vocalDuck", vocalDuck);
+            root.addProperty("pitchMatch", pitchMatch);
+            root.addProperty("skipIntro", skipIntro);
             root.addProperty("overlapSeconds", overlapSeconds);
             JsonConfigStorage.writeObject(ConfigPaths.AUTOMIX, GSON, root);
         } catch (Throwable ignored) {

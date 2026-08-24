@@ -233,6 +233,15 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         completePersistentNotice(IslandNoticeType.REFRESHING, IslandNoticeType.REFRESH_ERROR,
                 "歌单同步失败", safeNoticeValue(message, "网络请求失败"));
     }
+
+    /**
+     * 音频缓存清理结果。刻意沿用歌单同步的成功/失败外观：这是一次性结果提示，
+     * 不值得为它新增一种通知类型与图标，也因此自动遵循既有的排队与优先级。
+     */
+    public static void showCacheSweep(String detail, boolean success) {
+        publishNotice(success ? IslandNoticeType.REFRESH_SUCCESS : IslandNoticeType.REFRESH_ERROR,
+                success ? "缓存已清理" : "缓存清理失败", safeNoticeValue(detail, "没有可回收的缓存"));
+    }
     /** Keeps the island visible while a selected track is submitted to a playlist. */
     public static void showPlaylistTrackAddInProgress(String playlistName) {
         publishNotice(IslandNoticeType.PLAYLIST_TRACK_ADDING, "加入歌单",
@@ -319,13 +328,21 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
      * Announces a seamless automix handover. An ordinary notice on purpose: the blend is already
      * audible, so this card must queue politely behind anything the user actually triggered instead of
      * interrupting it.
+     *
+     * <p>只报歌名。交接计划里那一长串参数（重叠时长、混出原因、BPM、跳过的前奏、低频交换、去人声深度、
+     * 节奏锁定幅度、调性、音量补偿）是调试信息而不是用户信息：听众要知道的只有「现在换成哪首歌了」，
+     * 而那些数字既看不完也无从据此操作。完整明细仍然打在控制台的 {@code [Automix] handover} 一行里。</p>
      */
-    public static void showAutomixHandover(String trackName, String detail) {
-        publishNotice(IslandNoticeType.AUTOMIX, "无缝切换",
-                safeNoticeValue(trackName, "下一首") + " · " + safeNoticeValue(detail, "已交接"));
+    public static void showAutomixHandover(String trackName) {
+        publishNotice(IslandNoticeType.AUTOMIX, "无缝切换", safeNoticeValue(trackName, "下一首"));
     }
 
-    /** Reports that the next track is decoded and waiting on the idle deck. */
+    /**
+     * 下一首已经解码好、静静等在备用轨上。
+     *
+     * <p>只报歌名 + 一句结论，同样不带交接计划里那串参数：这条的作用是让人知道「下一首会平滑接进来」，
+     * 而不是解释它将怎么接。</p>
+     */
     public static void showAutomixArmed(String trackName) {
         publishNotice(IslandNoticeType.AUTOMIX, "下一首已就绪",
                 safeNoticeValue(trackName, "下一首") + " · 将无缝接入");
@@ -1163,12 +1180,16 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
             float plateAlpha = alpha * (.82f + (float) pulse * .12f) * (.34f + .66f * (float) iconReveal);
             // 字形不再跟着呼吸忽明忽暗——那正是"图标动效看不清"的主因，常亮才读得出形状。
             float glyphAlpha = alpha * .98f * (.40f + .60f * (float) iconReveal);
+            // 这一帧会盖上歌曲封面时，托盘只留深色底衬、不再刷强调色。封面是半透明画上去的，
+            // 底下那层强调色会透过来，看起来就是「整张封面被主题色染了」。
+            float artworkMix = ambientMix > .005f && hasAmbientArtwork(ambient) ? ambientMix : 0f;
             scaleAtPos(iconX, iconY, (systemCard ? 1.0 : 1.06) * iconFit);
             // 深色底衬：液态玻璃这类亮表面上，只靠一层薄强调色会让字形糊进背景里。
             roundedRect(iconX - iconPlate * .5, iconY - iconPlate * .5, iconPlate, iconPlate,
-                    iconPlate * .5, hexColor(.020f, .026f, .038f, plateAlpha * .60f));
+                    iconPlate * .5, hexColor(.020f, .026f, .038f, plateAlpha * (.60f + .36f * artworkMix)));
             roundedRect(iconX - iconPlate * .5, iconY - iconPlate * .5, iconPlate, iconPlate,
-                    iconPlate * .5, RenderSystem.reAlpha(accentColor, plateAlpha * (liquidGlass ? .20f : .26f)));
+                    iconPlate * .5, RenderSystem.reAlpha(accentColor,
+                            plateAlpha * (liquidGlass ? .20f : .26f) * (1f - artworkMix)));
             if (liquidGlass) {
                 // 磨砂托盘：上亮下暗的一层反光，让图标像压在玻璃里而不是贴在表面。
                 roundedRectGradientVertical(iconX - iconPlate * .5, iconY - iconPlate * .5,
@@ -1584,25 +1605,50 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
      */
     private boolean drawAmbientArtwork(double centerX, double centerY, double size, float alpha) {
         try {
-            Music music = CloudMusic.currentlyPlaying;
-            if (music == null || size <= 2.0) return false;
-            Location cover = CloudMusic.preferredCoverLocation(music, music.getSmallCoverLocation());
-            ITextureObject texture = TextureManager.getInstance().getTexture(cover);
-            if (texture == null) {
-                // 小封面还没下载好时退回大封面；两张都没有就交给调用方画字形。
-                texture = TextureManager.getInstance().getTexture(music.getCoverLocation());
-            }
+            if (CloudMusic.currentlyPlaying == null || size <= 2.0) return false;
+            ITextureObject texture = ambientArtworkTexture();
             if (texture == null) return false;
+            double radius = Math.min(5.0, size * .28);
+            // 先垫一层几乎不透明的深色底：封面是按 alpha 画上去的，底下要是留着托盘那层强调色，
+            // 透过来的主题色会把整张封面染成一片单色（展开动画期间 alpha 还更低，染得更明显）。
+            roundedRect(centerX - size * .5, centerY - size * .5, size, size, radius,
+                    hexColor(.016f, .020f, .030f, Math.min(1f, alpha * 1.06f)));
+            GL11.glColor4f(1f, 1f, 1f, 1f);
             api.getGLStateManager().bindTexture(texture.getGlTextureId());
             texture.linearFilter();
-            roundedRectTextured(centerX - size * .5, centerY - size * .5, size, size,
-                    Math.min(5.0, size * .28), alpha);
+            roundedRectTextured(centerX - size * .5, centerY - size * .5, size, size, radius, alpha);
             api.getGLStateManager().bindTexture(0);
             GL11.glColor4f(1f, 1f, 1f, 1f);
             return true;
         } catch (Throwable ignored) {
             return false;
         }
+    }
+
+    /**
+     * 常驻封面要用的纹理，拿不到就返回 {@code null}（小封面没下载好时退回大封面）。
+     *
+     * <p>单独抽出来是为了让左侧托盘在画自己之前就知道「这一帧会不会被封面盖住」：会盖住时
+     * 托盘那层强调色必须关掉，否则封面被主题色染色。</p>
+     */
+    private static ITextureObject ambientArtworkTexture() {
+        try {
+            Music music = CloudMusic.currentlyPlaying;
+            if (music == null) return null;
+            Location cover = CloudMusic.preferredCoverLocation(music, music.getSmallCoverLocation());
+            ITextureObject texture = TextureManager.getInstance().getTexture(cover);
+            if (texture == null) {
+                texture = TextureManager.getInstance().getTexture(music.getCoverLocation());
+            }
+            return texture;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** 这一帧常驻岛左侧会不会画歌曲封面。托盘配色要据此决定，所以必须在绘制前问一次。 */
+    private boolean hasAmbientArtwork(IslandAmbientStatus.Snapshot ambient) {
+        return ambient != null && ambient.isNowPlaying() && ambientArtworkTexture() != null;
     }
 
     /**
@@ -1946,12 +1992,15 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         double tileSize = Math.min(31.0, Math.max(21.0, islandHeight - 16.0));
         double tileRadius = Math.min(8.0, tileSize * .28);
         double beat = .985 + .025 * (.5 + .5 * Math.sin((preview ? now / 8.0 : now / 290.0)));
+        // 同 drawIsland 的托盘：封面会盖在这块砖上，砖上那层 66% 的强调色会透过半透明的封面，
+        // 把封面染成主题色。要盖封面就把强调色让出来，只留下面那层深色。
+        float tileArtworkMix = ambientMix > .005f && hasAmbientArtwork(ambient) ? ambientMix : 0f;
         scaleAtPos(centerX, centerY, beat);
         roundedRect(centerX - tileSize * .5, centerY - tileSize * .5, tileSize, tileSize, tileRadius,
-                RenderSystem.reAlpha(accentColor, alpha * .66f));
+                RenderSystem.reAlpha(accentColor, alpha * .66f * (1f - tileArtworkMix)));
         roundedRect(centerX - tileSize * .5 + 1.0, centerY - tileSize * .5 + 1.0,
                 Math.max(1.0, tileSize - 2.0), Math.max(1.0, tileSize - 2.0), Math.max(1.0, tileRadius - 1.0),
-                hexColor(.018f, .026f, .045f, alpha * .76f));
+                hexColor(.018f, .026f, .045f, alpha * (.76f + .22f * tileArtworkMix)));
         roundedOutline(centerX - tileSize * .5, centerY - tileSize * .5, tileSize, tileSize, tileRadius, .80,
                 new Color(255, 255, 255, DynamicIslandMath.clamp255(alpha * 92f)));
 

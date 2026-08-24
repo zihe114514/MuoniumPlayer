@@ -3,7 +3,7 @@ package com.muoniumplayer.core.ncm.music;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import repackage.com.jsyn.exceptions.ChannelMismatchException;
-import repackage.processing.sound.BassSwap;
+import repackage.processing.sound.AutomixDeckChain;
 import repackage.processing.sound.SoundFile;
 
 import java.io.File;
@@ -26,13 +26,25 @@ public class AudioPlayer {
     private volatile float fadeGain = 1.0f;
 
     /**
-     * Low shelf sitting in this deck's own signal chain, used by the automix bass swap. Only attached
-     * when automix is actually going to use it, so a player with automix off keeps exactly the original
-     * graph. At 0 dB the filter is a bit-exact pass-through, so it can stay attached for a whole track.
+     * The automix processing chain (low shelf + vocal-band canceller) sitting in this deck's own signal
+     * path. Only attached when automix is actually going to use it, so a player with automix off keeps
+     * exactly the original graph. At 0 dB and depth 0 both stages are bit-exact pass-throughs, so the
+     * chain can stay attached for a whole track.
      */
-    private BassSwap bassSwap;
+    private AutomixDeckChain automixChain;
     private volatile float bassGainDb = 0.0f;
+    private volatile float vocalDuckDepth = 0.0f;
     private volatile float playbackRate = 1.0f;
+    /** 音高倍率。只有「整半音吸附」会动它；节奏锁定恒为 1。 */
+    private volatile float pitchRatio = 1.0f;
+
+    /**
+     * 上一次 {@link #setPlaybackRate} 是否由 WSOLA 时间伸缩完成（而不是重采样）。
+     *
+     * <p>只用于日志与诊断。真正的分支判断每次都重新问 {@code SoundFile.timeStretch()} 的返回值，
+     * 不依赖这个缓存 —— 曲目换了、伸缩层能力变了，缓存会过期。</p>
+     */
+    private volatile boolean pitchPreserved;
 
     /**
      * The decoded cache file this deck was built from, kept so offline analysis can open it again with
@@ -65,14 +77,17 @@ public class AudioPlayer {
         SoundFile next = loadUsableSoundFile(file);
         next.setOnFinished(() -> finished = true);
 
-        releaseBassSwap();
+        releaseAutomixChain();
         SoundFile previous = this.player;
         this.player = next;
         finished = false;
         this.closed = false;
         this.prepared = false;
         this.bassGainDb = 0.0f;
+        this.vocalDuckDepth = 0.0f;
         this.playbackRate = 1.0f;
+        this.pitchRatio = 1.0f;
+        this.pitchPreserved = false;
         this.sourceFile = file;
         dispose(previous);
     }
@@ -86,7 +101,7 @@ public class AudioPlayer {
         if (!isUsable())
             return;
 
-        attachBassSwap();
+        attachAutomixChain();
 
         finished = false;
         try {
@@ -115,6 +130,7 @@ public class AudioPlayer {
         float safeMillis = Math.max(0.0f, Math.min(total, millis));
         try {
             this.player.jump(safeMillis / 1000F);
+            this.player.resyncTimeStretch();
             this.player.amp(effectiveAmp());
         } catch (RuntimeException ignored) {
             // Seeking is best-effort. A malformed stream must not crash the UI.
@@ -140,7 +156,7 @@ public class AudioPlayer {
             // out of the circuit and never puts it back (JSyn's Processing wrapper has its own TODO
             // about that). Attaching first meant the incoming deck of a blend played completely
             // unfiltered - both tracks kept their full low end and the seam thumped.
-            attachBassSwap();
+            attachAutomixChain();
             this.player.play();
             this.player.amp(effectiveAmp());
         } catch (ChannelMismatchException mismatch) {
@@ -168,7 +184,7 @@ public class AudioPlayer {
             finished = false;
             this.player.amp(0.0f);
             float cued = cueTo(millis);
-            attachBassSwap();
+            attachAutomixChain();
             primeStreamWindow(cued);
             this.prepared = true;
         } catch (RuntimeException ignored) {
@@ -189,7 +205,7 @@ public class AudioPlayer {
         finished = false;
         try {
             this.player.amp(effectiveAmp());
-            attachBassSwap();   // idempotent; the shelf normally survives from prepareStart()
+            attachAutomixChain();   // idempotent; the chain normally survives from prepareStart()
             this.player.play();
             this.player.amp(effectiveAmp());
         } catch (ChannelMismatchException mismatch) {
@@ -210,6 +226,9 @@ public class AudioPlayer {
                 ? 0.0f
                 : Math.max(0.0f, Math.min(Math.max(0.0f, total - 50.0f), millis));
         if (safeMillis > 0.0f) this.player.cue(safeMillis / 1000F);
+        // 定位之后必须让时间伸缩层重新对齐：它的输出时间轴是自己往前长的，
+        // 不重锚就会在跳转后继续放跳转前那一段。
+        this.player.resyncTimeStretch();
         return safeMillis;
     }
 
@@ -252,30 +271,44 @@ public class AudioPlayer {
     }
 
     /**
-     * Attaches the automix low shelf if it is not already in the chain.
+     * Attaches the automix processing chain if it is not already in the graph.
      *
      * <p>Called just before the deck starts sounding, so the graph is never rewired while audio is
-     * running through it. The effect is only created when automix is actually allowed to use it: with
-     * automix (or the bass swap) switched off, the deck keeps the original, effect-free chain.</p>
+     * running through it. The chain is only created when automix is actually allowed to use it: with
+     * automix off - or with both the bass swap and the vocal duck off - the deck keeps the original,
+     * effect-free graph.</p>
      */
-    private void attachBassSwap() {
-        if (!AutomixSettings.isEnabled() || !AutomixSettings.isBassSwapEnabled()) return;
+    private void attachAutomixChain() {
+        if (!AutomixSettings.isEnabled()) return;
+        if (!AutomixSettings.isBassSwapEnabled() && !AutomixSettings.isVocalDuckEnabled()) return;
         if (!isUsable()) return;
         try {
-            if (this.bassSwap == null) {
-                this.bassSwap = new BassSwap();
-                this.bassSwap.frequency(AutomixSettings.BASS_SHELF_HZ);
+            if (this.automixChain == null) {
+                this.automixChain = new AutomixDeckChain();
+                this.automixChain.frequency(AutomixSettings.BASS_SHELF_HZ);
             }
-            this.bassSwap.resetTo(this.bassGainDb);
+            // The centre canceller needs to know whether there is a real stereo image: a mono file is
+            // panned into two identical channels, where subtracting the centre would take the whole
+            // cancelled band with it.
+            this.automixChain.stereo(channelCount() >= 2);
+            this.automixChain.resetTo(this.bassGainDb, this.vocalDuckDepth);
             // Not isProcessing(): pause() rips the effect out of the circuit without telling the
             // effect, so a resumed deck has to be re-wired or it would play unfiltered.
-            if (!this.bassSwap.isAttachedTo(this.player)) {
-                this.bassSwap.forget(this.player);
-                this.bassSwap.process(this.player);
+            if (!this.automixChain.isAttachedTo(this.player)) {
+                this.automixChain.forget(this.player);
+                this.automixChain.process(this.player);
             }
         } catch (Throwable ignored) {
             // An engine that refuses the extra units must not stop the track from playing.
-            this.bassSwap = null;
+            this.automixChain = null;
+        }
+    }
+
+    private int channelCount() {
+        try {
+            return Math.max(1, this.player.channels());
+        } catch (RuntimeException ignored) {
+            return 1;
         }
     }
 
@@ -289,12 +322,37 @@ public class AudioPlayer {
     public void setBassGainDb(float db) {
         float safe = Float.isNaN(db) || Float.isInfinite(db) ? 0.0f : db;
         this.bassGainDb = safe;
-        BassSwap swap = this.bassSwap;
-        if (swap == null) return;
+        AutomixDeckChain chain = this.automixChain;
+        if (chain == null) return;
         try {
-            swap.gainDb(safe);
+            chain.gainDb(safe);
         } catch (RuntimeException ignored) {
         }
+    }
+
+    /**
+     * Sets how hard this deck's vocal band is cancelled, 0 leaving it alone and 1 being full
+     * cancellation of the band-limited centre.
+     *
+     * <p>Used on the deck that is fading <em>in</em>: it enters as an instrumental bed so the outgoing
+     * track's vocal never has a second vocal on top of it, and the cancellation is released before the
+     * blend ends. A no-op when no chain is attached, so callers do not have to know which decks are
+     * processed.</p>
+     */
+    public void setVocalDuckDepth(float depth) {
+        float safe = Float.isNaN(depth) || Float.isInfinite(depth)
+                ? 0.0f : Math.max(0.0f, Math.min(1.0f, depth));
+        this.vocalDuckDepth = safe;
+        AutomixDeckChain chain = this.automixChain;
+        if (chain == null) return;
+        try {
+            chain.duckDepth(safe);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    public float getVocalDuckDepth() {
+        return this.vocalDuckDepth;
     }
 
     /** The decoded file behind this deck, or {@code null} when it is not known. */
@@ -311,40 +369,108 @@ public class AudioPlayer {
      *
      * <p>Used only on the deck that is fading <em>out</em> of a blend: nudging it onto the incoming
      * track's tempo keeps the two beat grids locked for the whole overlap instead of letting them drift
-     * apart by a fraction of a beat. JSyn's rate control also shifts pitch, which is exactly why the
-     * outgoing side is the one that gets bent - by then it is a few dB down and on its way out, while
-     * the track the listener is about to keep listening to stays at its own pitch.</p>
+     * apart by a fraction of a beat.</p>
+     *
+     * <p><b>优先走时间伸缩，不走重采样。</b>{@code SoundFile.rate()} 拧的是 JSyn 读头的步进，速度和音高
+     * 一起变 —— 1.03 倍就是升高约半个音，而且是那种"整首歌走调"的听感，用户反馈过。
+     * {@link repackage.processing.sound.SoundFile#timeStretch} 走的是 WSOLA：只改速度，音高不动。
+     * 只有这首歌没有伸缩层时（{@code wrap()} 判定包不了）才退回原来的重采样，
+     * 那时的行为和这次改动之前完全一致。</p>
      */
     public void setPlaybackRate(float ratio) {
-        if (Float.isNaN(ratio) || Float.isInfinite(ratio)) return;
-        float safe = Math.max(.5f, Math.min(2.0f, ratio));
+        setSpeedAndPitch(ratio, 1.0f);
+    }
+
+    /**
+     * 分别设置<b>速度</b>与<b>音高</b>倍率，两者互不牵连。
+     *
+     * <p>这是 TarsosDSP 的 {@code PitchShiftingExample} 那条链在本项目里的等价物：它把
+     * {@code WaveformSimilarityBasedOverlapAdd}（时间伸缩）和 {@code RateTransposer}（重采样）串起来，
+     * 靠两者的比值把「速度」和「音高」解耦。本项目里重采样那一环<b>本来就有</b> ——
+     * JSyn 读头的 {@code rate} 端口就是 {@code RateTransposer}，所以只要补上 WSOLA 就凑齐了。</p>
+     *
+     * <p>推导：WSOLA 用因子 {@code t} 时，吃掉 {@code t} 倍输入产出一份输出，音高不变；读头用
+     * {@code rate = r} 时，速度与音高同时 × {@code r}。串起来<b>速度 = t·r、音高 = r</b>。于是：</p>
+     * <ul>
+     *   <li>只改速度（节奏锁定）：{@code r = 1}、{@code t = tempo}；</li>
+     *   <li>只改音高（整半音吸附）：{@code r = pitch}、{@code t = tempo / pitch}，
+     *       {@code tempo = 1} 时 {@code t = 1/pitch} 正好把重采样带来的时长变化还原回去。</li>
+     * </ul>
+     *
+     * <p>没有伸缩层的曲子（{@code wrap()} 判定包不了：单声道以外的多声道、短到装不满一个 WSOLA 序列）
+     * 只剩一个重采样端口，速度与音高重新耦合，只能把两者的乘积拧上去 —— 那正是接 WSOLA 之前的行为，
+     * 所以此时也把乘积收回 automix 的一个半音预算之内。</p>
+     *
+     * @param tempo 速度倍率，1 表示按素材原速
+     * @param pitch 音高倍率，1 表示不移调
+     */
+    public void setSpeedAndPitch(float tempo, float pitch) {
+        if (Float.isNaN(tempo) || Float.isInfinite(tempo)) return;
+        if (Float.isNaN(pitch) || Float.isInfinite(pitch)) return;
+        float safeTempo = Math.max(.5f, Math.min(2.0f, tempo));
+        float safePitch = Math.max(.5f, Math.min(2.0f, pitch));
         // The fade driver ticks every 10 ms and holds the rate flat for most of the blend; re-setting
         // the port with an unchanged value every tick would be pure overhead.
-        if (Math.abs(safe - this.playbackRate) < .0005f) return;
-        this.playbackRate = safe;
+        if (Math.abs(safeTempo - this.playbackRate) < .0005f
+                && Math.abs(safePitch - this.pitchRatio) < .0005f) {
+            return;
+        }
+        this.playbackRate = safeTempo;
+        this.pitchRatio = safePitch;
         if (!isUsable()) return;
         try {
-            this.player.rate(safe);
+            if (this.player.canTimeStretch()) {
+                this.pitchPreserved = true;
+                // 顺序无关紧要（两级串联），但读头必须先落到 pitch 上，否则某一帧里会出现
+                // 「伸缩已经按解耦后的比值跑、读头还停在上一次的 pitch」这种半拍不一致。
+                this.player.rate(safePitch);
+                this.player.timeStretch(safeTempo / safePitch);
+                return;
+            }
+            this.pitchPreserved = false;
+            float combined = safeTempo * safePitch;
+            if (combined < AutomixSettings.MIN_PLAYBACK_RATE) combined = AutomixSettings.MIN_PLAYBACK_RATE;
+            if (combined > AutomixSettings.MAX_PLAYBACK_RATE) combined = AutomixSettings.MAX_PLAYBACK_RATE;
+            this.player.rate(combined);
         } catch (RuntimeException ignored) {
         }
+    }
+
+    /** 当前的音高倍率，1 表示没移调。 */
+    public float getPitchRatio() {
+        return this.pitchRatio;
+    }
+
+    /** 这一次变速是不是由 WSOLA 完成的（也就是音高没被动过）。 */
+    public boolean isPitchPreserved() {
+        return this.pitchPreserved;
+    }
+
+    /** 时间伸缩层当前是否在跑。诊断用：交接结束后应当仍为 true（接管后不退回直通）。 */
+    public boolean isTimeStretching() {
+        return isUsable() && this.player.isTimeStretching();
     }
 
     public float getPlaybackRate() {
         return this.playbackRate;
     }
 
-    /** Returns the deck to flat response and natural tempo. */
+    /** Returns the deck to flat response, full vocal and natural tempo. */
     public void resetAutomixProcessing() {
         setBassGainDb(0.0f);
-        if (Math.abs(this.playbackRate - 1.0f) > .0005f) setPlaybackRate(1.0f);
+        setVocalDuckDepth(0.0f);
+        if (Math.abs(this.playbackRate - 1.0f) > .0005f
+                || Math.abs(this.pitchRatio - 1.0f) > .0005f) {
+            setSpeedAndPitch(1.0f, 1.0f);
+        }
     }
 
-    private void releaseBassSwap() {
-        BassSwap swap = this.bassSwap;
-        this.bassSwap = null;
-        if (swap == null) return;
+    private void releaseAutomixChain() {
+        AutomixDeckChain chain = this.automixChain;
+        this.automixChain = null;
+        if (chain == null) return;
         try {
-            swap.release();
+            chain.release();
         } catch (Throwable ignored) {
         }
     }
@@ -374,7 +500,7 @@ public class AudioPlayer {
     public synchronized void close() {
         if (closed) return;
         closed = true;
-        releaseBassSwap();
+        releaseAutomixChain();
         dispose(this.player);
     }
 
