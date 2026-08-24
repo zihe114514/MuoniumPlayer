@@ -47,6 +47,167 @@ final class LyricStyleQuickPanel implements SharedRenderingConstants, SharedCons
     private static final int KIND_COLOR_COUNT = 5;
     private static final int KIND_SWATCHES = 6;
     private static final int KIND_HSB = 7;
+    /** 当前样式专属的浮点滑块。 */
+    private static final int KIND_STYLE_SLIDER = 8;
+    /** 当前样式专属的开关 / 枚举，点一下换下一档。 */
+    private static final int KIND_STYLE_TOGGLE = 9;
+
+    // ---- 各样式专属参数表 ----
+    // 做成 static final 而不是每次现算：layout() 每帧都会跑一遍，没必要每帧 new 一堆小数组。
+
+    private static final HudSetting[] NO_SETTINGS = new HudSetting[0];
+    private static final int[] NO_TOGGLES = new int[0];
+
+    // 「歌词字号」放在每套样式参数的第一条：它对这几套样式都有效，但对「逐行滚动」「律动词云」无效
+    // （那两套有自己的字号机制），所以不能塞进上面那个通用的 SETTINGS 里 —— 否则会出现「调了没反应」。
+    private static final HudSetting[] LUMINOUS_SETTINGS = {
+            HudSetting.LYRIC_FONT_SCALE,
+            HudSetting.LUMINOUS_WORD_SPACING, HudSetting.LUMINOUS_FLOAT
+    };
+    private static final HudSetting[] PARTITA_SETTINGS = {
+            HudSetting.LYRIC_FONT_SCALE,
+            HudSetting.PARTITA_STAGGER_MIN, HudSetting.PARTITA_STAGGER_MAX
+    };
+    private static final HudSetting[] FUME_SETTINGS = {
+            HudSetting.LYRIC_FONT_SCALE,
+            HudSetting.FUME_TEXT_HOLD, HudSetting.FUME_CAMERA_SPEED, HudSetting.FUME_HERO_SCALE
+    };
+    private static final HudSetting[] CAPPELLA_SETTINGS = {
+            HudSetting.LYRIC_FONT_SCALE,
+            HudSetting.CAPPELLA_BUBBLE_WIDTH, HudSetting.CAPPELLA_EMOJI_CHANCE
+    };
+    private static final HudSetting[] TILT_SETTINGS = {
+            HudSetting.LYRIC_FONT_SCALE,
+            HudSetting.TILT_SPLIT, HudSetting.TILT_STYLE
+    };
+    private static final HudSetting[] DIORAMA_SETTINGS = {
+            HudSetting.LYRIC_FONT_SCALE,
+            HudSetting.DIORAMA_DEPTH
+    };
+    private static final HudSetting[] PENDOLO_SETTINGS = {
+            HudSetting.LYRIC_FONT_SCALE,
+            HudSetting.PENDOLO_ARC_RADIUS, HudSetting.PENDOLO_ARC_ANGLE,
+            HudSetting.PENDOLO_ACTIVE_SCALE
+    };
+
+    private static final int TOGGLE_LUMINOUS_ROTATION = 1;
+    private static final int TOGGLE_PARTITA_GUIDES = 2;
+    private static final int TOGGLE_FUME_BACKGROUND = 3;
+    private static final int TOGGLE_CAPPELLA_AVATAR = 4;
+    private static final int TOGGLE_TILT_COLORS = 5;
+    private static final int TOGGLE_DIORAMA_DUST = 6;
+    private static final int TOGGLE_PENDOLO_GEARS = 7;
+    private static final int TOGGLE_CAPPELLA_EMOJI = 8;
+
+    private static final int[] LUMINOUS_TOGGLES = {TOGGLE_LUMINOUS_ROTATION};
+    private static final int[] PARTITA_TOGGLES = {TOGGLE_PARTITA_GUIDES};
+    private static final int[] FUME_TOGGLES = {TOGGLE_FUME_BACKGROUND};
+    private static final int[] CAPPELLA_TOGGLES = {TOGGLE_CAPPELLA_AVATAR, TOGGLE_CAPPELLA_EMOJI};
+    private static final int[] TILT_TOGGLES = {TOGGLE_TILT_COLORS};
+    private static final int[] DIORAMA_TOGGLES = {TOGGLE_DIORAMA_DUST};
+    private static final int[] PENDOLO_TOGGLES = {TOGGLE_PENDOLO_GEARS};
+
+    private static final String[] TILT_COLOR_NAMES = {"默认", "互换", "全强调", "全主色"};
+
+    /** 第 0 档是「左侧歌曲封面 + 右侧登录账号头像」，未登录时右侧自动退回封面。 */
+    private static final String[] CAPPELLA_AVATAR_NAMES = {"封面+我的头像", "主题色", "内置头像"};
+
+    private static HudSetting[] styleSettings() {
+        switch (FullscreenLyricStyle.current()) {
+            case LUMINOUS: return LUMINOUS_SETTINGS;
+            case PARTITA: return PARTITA_SETTINGS;
+            case FUME: return FUME_SETTINGS;
+            case CAPPELLA: return CAPPELLA_SETTINGS;
+            case TILT: return TILT_SETTINGS;
+            case DIORAMA: return DIORAMA_SETTINGS;
+            case PENDOLO: return PENDOLO_SETTINGS;
+            default: return NO_SETTINGS;
+        }
+    }
+
+    private static int[] styleToggles() {
+        switch (FullscreenLyricStyle.current()) {
+            case LUMINOUS: return LUMINOUS_TOGGLES;
+            case PARTITA: return PARTITA_TOGGLES;
+            case FUME: return FUME_TOGGLES;
+            case CAPPELLA: return CAPPELLA_TOGGLES;
+            case TILT: return TILT_TOGGLES;
+            case DIORAMA: return DIORAMA_TOGGLES;
+            case PENDOLO: return PENDOLO_TOGGLES;
+            default: return NO_TOGGLES;
+        }
+    }
+
+    private static String toggleLabel(int id) {
+        switch (id) {
+            case TOGGLE_LUMINOUS_ROTATION: return "字词旋转";
+            case TOGGLE_PARTITA_GUIDES: return "指示线";
+            case TOGGLE_FUME_BACKGROUND: return "背景几何体";
+            case TOGGLE_CAPPELLA_AVATAR: return "头像来源";
+            case TOGGLE_CAPPELLA_EMOJI: return "表情气泡";
+            case TOGGLE_TILT_COLORS: return "配色方案";
+            case TOGGLE_DIORAMA_DUST: return "浮尘";
+            case TOGGLE_PENDOLO_GEARS: return "齿轮装饰";
+            default: return "";
+        }
+    }
+
+    private static String toggleValue(int id) {
+        switch (id) {
+            case TOGGLE_LUMINOUS_ROTATION: return HudConfig.luminousWordRotation ? "开" : "关";
+            case TOGGLE_PARTITA_GUIDES: return HudConfig.partitaGuideLines ? "开" : "关";
+            case TOGGLE_FUME_BACKGROUND: return HudConfig.fumeGeometricBackground ? "开" : "关";
+            case TOGGLE_CAPPELLA_AVATAR:
+                return CAPPELLA_AVATAR_NAMES[Math.max(0, Math.min(CAPPELLA_AVATAR_NAMES.length - 1,
+                        HudConfig.cappellaAvatarSource))];
+            case TOGGLE_CAPPELLA_EMOJI: return HudConfig.cappellaEmojiEnabled ? "开" : "关";
+            case TOGGLE_TILT_COLORS:
+                return TILT_COLOR_NAMES[Math.max(0, Math.min(TILT_COLOR_NAMES.length - 1,
+                        HudConfig.tiltColorScheme))];
+            case TOGGLE_DIORAMA_DUST: return HudConfig.dioramaDust ? "开" : "关";
+            case TOGGLE_PENDOLO_GEARS: return HudConfig.pendoloGearDecor ? "开" : "关";
+            default: return "";
+        }
+    }
+
+    /** 换下一档。{@code back} 为 true 表示往回退一档（多档枚举才有区别）。 */
+    private static void cycleToggle(int id, boolean back) {
+        switch (id) {
+            case TOGGLE_LUMINOUS_ROTATION:
+                HudConfig.luminousWordRotation = !HudConfig.luminousWordRotation;
+                break;
+            case TOGGLE_PARTITA_GUIDES:
+                HudConfig.partitaGuideLines = !HudConfig.partitaGuideLines;
+                break;
+            case TOGGLE_FUME_BACKGROUND:
+                HudConfig.fumeGeometricBackground = !HudConfig.fumeGeometricBackground;
+                break;
+            case TOGGLE_CAPPELLA_AVATAR: {
+                int span = CAPPELLA_AVATAR_NAMES.length;
+                int next = HudConfig.cappellaAvatarSource + (back ? -1 : 1);
+                HudConfig.cappellaAvatarSource = ((next % span) + span) % span;
+                break;
+            }
+            case TOGGLE_CAPPELLA_EMOJI:
+                HudConfig.cappellaEmojiEnabled = !HudConfig.cappellaEmojiEnabled;
+                break;
+            case TOGGLE_TILT_COLORS: {
+                int span = TILT_COLOR_NAMES.length;
+                int next = HudConfig.tiltColorScheme + (back ? -1 : 1);
+                HudConfig.tiltColorScheme = ((next % span) + span) % span;
+                break;
+            }
+            case TOGGLE_DIORAMA_DUST:
+                HudConfig.dioramaDust = !HudConfig.dioramaDust;
+                break;
+            case TOGGLE_PENDOLO_GEARS:
+                HudConfig.pendoloGearDecor = !HudConfig.pendoloGearDecor;
+                break;
+            default:
+                return;
+        }
+        HudConfig.save();
+    }
 
     private static final double MARGIN = 12.0;
     private static final double BUTTON_SIZE = 24.0;
@@ -190,6 +351,17 @@ final class LyricStyleQuickPanel implements SharedRenderingConstants, SharedCons
         for (int i = 0; i < SETTINGS.length; i++) {
             y = addRow(KIND_SLIDER, i, y, ROW_HEIGHT);
         }
+        HudSetting[] styleSliders = styleSettings();
+        int[] toggles = styleToggles();
+        if (styleSliders.length > 0 || toggles.length > 0) {
+            y = addRow(KIND_SECTION, 1, y, SECTION_HEIGHT);
+            for (int i = 0; i < styleSliders.length; i++) {
+                y = addRow(KIND_STYLE_SLIDER, i, y, ROW_HEIGHT);
+            }
+            for (int i = 0; i < toggles.length; i++) {
+                y = addRow(KIND_STYLE_TOGGLE, i, y, PICK_ROW_HEIGHT);
+            }
+        }
         if (FullscreenLyricStyle.current() == FullscreenLyricStyle.CADENZA) {
             y = addRow(KIND_SECTION, 0, y, SECTION_HEIGHT);
             y = addRow(KIND_DECOR_MODE, 0, y, PICK_ROW_HEIGHT);
@@ -264,7 +436,9 @@ final class LyricStyleQuickPanel implements SharedRenderingConstants, SharedCons
     private void handleRowClick(Row row, double mouseX, int mouseButton) {
         boolean right = mouseButton == 1;
         if (row.kind == KIND_STYLE) {
-            if (!right) FullscreenLyricStyle.next();
+            // 右键往回退一档：九种样式只能单向轮换的话，想回上一种得点八下。
+            if (right) FullscreenLyricStyle.previous();
+            else FullscreenLyricStyle.next();
             return;
         }
         if (row.kind == KIND_DECOR_MODE) {
@@ -303,10 +477,18 @@ final class LyricStyleQuickPanel implements SharedRenderingConstants, SharedCons
             }
             return;
         }
+        if (row.kind == KIND_STYLE_TOGGLE) {
+            int[] toggles = styleToggles();
+            if (row.index >= 0 && row.index < toggles.length) {
+                cycleToggle(toggles[row.index], right);
+            }
+            return;
+        }
         if (right) {
             return;
         }
-        if (row.kind == KIND_SLIDER || row.kind == KIND_BEATS || row.kind == KIND_HSB) {
+        if (row.kind == KIND_SLIDER || row.kind == KIND_BEATS || row.kind == KIND_HSB
+                || row.kind == KIND_STYLE_SLIDER) {
             dragKind = row.kind;
             dragIndex = row.index;
             applyDrag(mouseX);
@@ -328,6 +510,15 @@ final class LyricStyleQuickPanel implements SharedRenderingConstants, SharedCons
         if (dragKind == KIND_SLIDER) {
             if (dragIndex < 0 || dragIndex >= SETTINGS.length) return;
             HudSetting setting = SETTINGS[dragIndex];
+            double fraction = fractionAt(mouseX, trackLeft(), trackWidth());
+            setting.setValue((float) (setting.getMin() + (setting.getMax() - setting.getMin()) * fraction));
+            pendingSave = true;
+            return;
+        }
+        if (dragKind == KIND_STYLE_SLIDER) {
+            HudSetting[] sliders = styleSettings();
+            if (dragIndex < 0 || dragIndex >= sliders.length) return;
+            HudSetting setting = sliders[dragIndex];
             double fraction = fractionAt(mouseX, trackLeft(), trackWidth());
             setting.setValue((float) (setting.getMin() + (setting.getMax() - setting.getMin()) * fraction));
             pendingSave = true;
@@ -451,11 +642,29 @@ final class LyricStyleQuickPanel implements SharedRenderingConstants, SharedCons
             return;
         }
         if (row.kind == KIND_SLIDER) {
-            renderSettingRow(row, mouseX, mouseY, panelAlpha);
+            renderSettingRow(row, SETTINGS[row.index], mouseX, mouseY, panelAlpha);
+            return;
+        }
+        if (row.kind == KIND_STYLE_SLIDER) {
+            HudSetting[] sliders = styleSettings();
+            if (row.index >= 0 && row.index < sliders.length) {
+                renderSettingRow(row, sliders[row.index], mouseX, mouseY, panelAlpha);
+            }
+            return;
+        }
+        if (row.kind == KIND_STYLE_TOGGLE) {
+            int[] toggles = styleToggles();
+            if (row.index >= 0 && row.index < toggles.length) {
+                int id = toggles[row.index];
+                renderPickRow(row, toggleLabel(id), toggleValue(id), mouseX, mouseY, panelAlpha);
+            }
             return;
         }
         if (row.kind == KIND_SECTION) {
-            FontManager.pf12bold.drawString("背景配色", trackLeft(), row.y + 3,
+            String title = row.index == 1
+                    ? FullscreenLyricStyle.current().getDisplayName() + " 参数"
+                    : "背景配色";
+            FontManager.pf12bold.drawString(title, trackLeft(), row.y + 3,
                     hexColor(1f, 1f, 1f, panelAlpha * .52f));
             return;
         }
@@ -506,8 +715,8 @@ final class LyricStyleQuickPanel implements SharedRenderingConstants, SharedCons
                 reAlpha(accent, panelAlpha));
     }
 
-    private void renderSettingRow(Row row, double mouseX, double mouseY, float panelAlpha) {
-        HudSetting setting = SETTINGS[row.index];
+    private void renderSettingRow(Row row, HudSetting setting,
+                                  double mouseX, double mouseY, float panelAlpha) {
         double left = trackLeft();
         double width = trackWidth();
         double trackY = row.y + 16;
@@ -522,7 +731,7 @@ final class LyricStyleQuickPanel implements SharedRenderingConstants, SharedCons
 
         double range = Math.max(1.0e-4, setting.getMax() - setting.getMin());
         double fraction = Math.max(0.0, Math.min(1.0, (setting.getValue() - setting.getMin()) / range));
-        boolean hover = (dragKind == KIND_SLIDER && dragIndex == row.index)
+        boolean hover = (dragKind == row.kind && dragIndex == row.index)
                 || isInside(mouseX, mouseY, left, trackY - 6, width, TRACK_HEIGHT + 12);
         renderTrack(left, trackY, width, fraction, hover, panelAlpha);
     }

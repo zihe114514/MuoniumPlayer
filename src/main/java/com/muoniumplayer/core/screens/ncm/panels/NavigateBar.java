@@ -10,17 +10,17 @@ import com.muoniumplayer.core.management.FontManager;
 import com.muoniumplayer.core.ncm.api.CloudMusicApi;
 import com.muoniumplayer.core.ncm.music.CadenceMusicService;
 import com.muoniumplayer.core.ncm.music.CloudMusic;
+import com.muoniumplayer.core.ncm.music.KuGouMusicService;
 import com.muoniumplayer.core.ncm.music.MusicPlatform;
 import com.muoniumplayer.core.ncm.music.dto.Music;
 import com.muoniumplayer.core.ncm.music.dto.PlayList;
 import com.muoniumplayer.core.rendering.DownloadDynamicIsland;
 import com.muoniumplayer.core.rendering.FontelloIcons;
 import com.muoniumplayer.core.rendering.MusicBrandIcons;
-import com.muoniumplayer.core.rendering.TextureManager;
 import com.muoniumplayer.core.rendering.animation.Interpolations;
 import com.muoniumplayer.core.rendering.font.CFontRenderer;
 import com.muoniumplayer.core.rendering.rendersystem.RenderSystem;
-import com.muoniumplayer.core.rendering.texture.Textures;
+import com.muoniumplayer.core.rendering.texture.AccountAvatar;
 import com.muoniumplayer.core.rendering.ui.AbstractWidget;
 import com.muoniumplayer.core.rendering.ui.container.Panel;
 import com.muoniumplayer.core.rendering.ui.container.ScrollPanel;
@@ -301,9 +301,12 @@ public class NavigateBar extends NCMPanel {
         }
 
         boolean qqMode = CadenceMusicService.getCurrentPlatform() == MusicPlatform.QQ;
-        boolean neteaseMode = !qqMode;
-        if (neteaseMode || qqMode) {
-            LabelWidget lblDiscovery = new LabelWidget(qqMode ? "QQ 音乐发现" : "网易云发现", FontManager.pf14bold);
+        boolean kugouMode = CadenceMusicService.getCurrentPlatform() == MusicPlatform.KUGOU;
+        // GD 聚合源沿用网易云那一套入口（原来 neteaseMode 就是这个含义），这里只把酷狗单独拆出来。
+        boolean neteaseMode = !qqMode && !kugouMode;
+        {
+            LabelWidget lblDiscovery = new LabelWidget(
+                    kugouMode ? "酷狗音乐发现" : qqMode ? "QQ 音乐发现" : "网易云发现", FontManager.pf14bold);
             lblDiscovery.setClickable(false);
             lblDiscovery.setBeforeRenderCallback(() -> {
                 lblDiscovery.setColor(NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT));
@@ -311,18 +314,39 @@ public class NavigateBar extends NCMPanel {
             });
             this.playlistPanel.addChild(lblDiscovery);
 
+            // 排行榜：网易云的榜单页最终展示的是 HomePanel 卡片墙，先取数据再一次切页（navigateAsync），
+            // 否则会先闪一个空的中转页、历史栈里也会多出一条回不去的记录。
+            // QQ 的榜单不一样 —— 它是真的留在 NeteaseDiscoveryPanel 里按歌曲行展示，所以照旧直接切页。
             this.playlistPanel.addChild(new PlaylistItem(FontelloIcons.LEADERBOARD, FontManager.fontello16,
                     () -> NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT),
-                    () -> "排行榜", () -> NCMScreen.getInstance().setCurrentPanel(
-                    new NeteaseDiscoveryPanel(NeteaseDiscoveryPanel.Page.TOP_LISTS,
-                            qqMode ? MusicPlatform.QQ : MusicPlatform.NETEASE))));
+                    () -> "排行榜", () -> {
+                if (qqMode) {
+                    // QQ 的榜单目录也是卡片墙（25 个榜），同样先取数据再一次切页。
+                    NCMScreen.getInstance().navigateAsync("排行榜", NeteaseDiscoveryPanel::loadQQTopListsPanel);
+                } else if (kugouMode) {
+                    // 酷狗榜单同样是卡片墙：先取数据再一次切页，避免闪一个空的中转页。
+                    NCMScreen.getInstance().navigateAsync("排行榜", () -> {
+                        List<PlayList> ranks = KuGouMusicService.rankPlaylists();
+                        return new HomePanel(ranks, "酷狗榜单 · " + ranks.size());
+                    });
+                } else {
+                    NCMScreen.getInstance().navigateAsync("排行榜", NeteaseDiscoveryPanel::loadTopListsPanel);
+                }
+            }));
+            if (qqMode) {
+                // QQ 也有自己的热搜端点，和网易云一样在发现页里展示列表，保持直接切页。
+                this.playlistPanel.addChild(new PlaylistItem("K", () -> NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT),
+                        () -> "热搜", () -> NCMScreen.getInstance().setCurrentPanel(
+                        new NeteaseDiscoveryPanel(NeteaseDiscoveryPanel.Page.HOT_SEARCH, MusicPlatform.QQ))));
+            }
             if (neteaseMode) {
+                // 热搜是真正在发现页里展示列表的，保持直接切页。
                 this.playlistPanel.addChild(new PlaylistItem("K", () -> NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT),
                         () -> "热搜", () -> NCMScreen.getInstance().setCurrentPanel(
                         new NeteaseDiscoveryPanel(NeteaseDiscoveryPanel.Page.HOT_SEARCH))));
                 this.playlistPanel.addChild(new PlaylistItem("D", () -> NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT),
-                        () -> "最近播放", () -> NCMScreen.getInstance().setCurrentPanel(
-                        new NeteaseDiscoveryPanel(NeteaseDiscoveryPanel.Page.RECENT_SONGS))));
+                        () -> "最近播放", () -> NCMScreen.getInstance()
+                        .navigateAsync("最近播放", NeteaseDiscoveryPanel::loadRecentSongsPanel)));
                 this.playlistPanel.addChild(new PlaylistItem(MusicBrandIcons.PERSONAL_FM, FontManager.musicBrand16,
                         () -> NCMScreen.getColor(NCMScreen.ColorType.ACCENT),
                         () -> "私人 FM", () -> NCMScreen.getInstance().setCurrentPanel(new PersonalFmPanel())));
@@ -336,21 +360,26 @@ public class NavigateBar extends NCMPanel {
 
         this.playlistPanel.addChild(lblPlaylists);
 
-        // QQ 账号歌单由 Cadence 异步加载；网易云继续使用现有 CloudMusic 缓存。
+        // QQ / 酷狗账号歌单都是异步加载的快照；网易云继续使用现有 CloudMusic 缓存。
         List<PlayList> pl = qqMode
                 ? CadenceMusicService.getQQUserPlaylistsSnapshot()
-                : CloudMusic.playLists;
+                : kugouMode ? KuGouMusicService.getUserPlaylistsSnapshot() : CloudMusic.playLists;
 
         if (qqMode && CadenceMusicService.isLoggedIn(MusicPlatform.QQ)
                 && !CadenceMusicService.areQQUserPlaylistsLoaded()) {
             CadenceMusicService.ensureQQUserPlaylistsAsync(() ->
                     MultiThreadingUtil.runOnMainThread(() -> NCMScreen.getInstance().markDirty()));
         }
+        if (kugouMode && CadenceMusicService.isLoggedIn(MusicPlatform.KUGOU)
+                && !KuGouMusicService.areUserPlaylistsLoaded()) {
+            KuGouMusicService.ensureUserPlaylistsAsync(() ->
+                    MultiThreadingUtil.runOnMainThread(() -> NCMScreen.getInstance().markDirty()));
+        }
 
         // QQ 的创建/收藏歌单统一显示在“我的歌单”下，不再因为平台切换而隐藏整个入口。
         lblPlaylists.setHidden(false);
         if (pl != null && !pl.isEmpty()) {
-            if (qqMode) {
+            if (qqMode || kugouMode) {
                 for (PlayList playList : pl) {
                     PlaylistItem item = new PlaylistItem("D",
                             () -> NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT),
@@ -377,11 +406,16 @@ public class NavigateBar extends NCMPanel {
                     this.playlistPanel.addChild(item);
                 }
             }
-        } else if (qqMode) {
-            String status = !CadenceMusicService.isLoggedIn(MusicPlatform.QQ)
+        } else if (qqMode || kugouMode) {
+            String status = kugouMode
+                    ? (!CadenceMusicService.isLoggedIn(MusicPlatform.KUGOU)
+                    ? "登录酷狗音乐后加载歌单"
+                    : (KuGouMusicService.areUserPlaylistsLoading()
+                    ? "正在加载酷狗歌单…" : "暂无可用酷狗歌单"))
+                    : (!CadenceMusicService.isLoggedIn(MusicPlatform.QQ)
                     ? "登录 QQ 音乐后加载歌单"
                     : (CadenceMusicService.areQQUserPlaylistsLoading()
-                    ? "正在加载 QQ 歌单…" : "暂无可用 QQ 歌单");
+                    ? "正在加载 QQ 歌单…" : "暂无可用 QQ 歌单"));
             PlaylistItem statusItem = new PlaylistItem("·",
                     () -> NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT),
                     () -> status,
@@ -396,7 +430,8 @@ public class NavigateBar extends NCMPanel {
             lblSubscribed.setPosition(6, lblSubscribed.getRelativeY());
         });
 
-        lblSubscribed.setHidden(qqMode);
+        // 收藏歌单是网易云独有的分组：QQ 与酷狗的收藏歌单都已经并入上面的"我的歌单"。
+        lblSubscribed.setHidden(qqMode || kugouMode);
         this.playlistPanel.addChild(lblSubscribed);
 
         if (neteaseMode && pl != null) {
@@ -569,27 +604,19 @@ public class NavigateBar extends NCMPanel {
         return false;
     }
 
+    /**
+     * 账号头像按需加载。
+     *
+     * <p>地址、贴图位置、节流全部交给 {@link AccountAvatar} —— 群唱样式的右侧头像用的是同一份。
+     * 两处必须请出同一个地址：贴图位置是按账号定的，若一处要 32 px、另一处要 128 px，
+     * 后下完的那张会盖掉前一张。</p>
+     */
     private void loadAvatar() {
-        MusicPlatform platform = CadenceMusicService.getCurrentPlatform();
-        String url;
-        Location avatarLoc = getUserAvatarLocation();
-        if (platform == MusicPlatform.QQ) {
-            url = CadenceMusicService.getQQAvatarUrl();
-        } else {
-            url = CloudMusic.profile == null ? "" : CloudMusic.profile.getAvatarUrl() + "?param=32y32";
-        }
-        if (avatarLoc == null || url == null || url.trim().isEmpty()) return;
-        if (TextureManager.getInstance().getTexture(avatarLoc) == null) {
-            Textures.downloadTextureAndLoadAsync(url, avatarLoc);
-        }
+        AccountAvatar.textureOrNull();
     }
 
     private Location getUserAvatarLocation() {
-        if (CadenceMusicService.getCurrentPlatform() == MusicPlatform.QQ) {
-            return CadenceMusicService.getQQAvatarUrl().isEmpty()
-                    ? null : Location.of("muonium/textures/account/qq_avatar.png");
-        }
-        return CloudMusic.profile == null ? null : CloudMusic.profile.getAvatarLocation();
+        return CadenceMusicService.getAccountAvatarLocation();
     }
 
     private SourceButton createSourceButton(MusicPlatform platform) {

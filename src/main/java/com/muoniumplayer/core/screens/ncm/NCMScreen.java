@@ -23,6 +23,7 @@ import com.muoniumplayer.core.rendering.ui.widgets.RoundedRectWidget;
 import com.muoniumplayer.core.screens.ncm.panels.ControlsBar;
 import com.muoniumplayer.core.screens.ncm.panels.HomePanel;
 import com.muoniumplayer.core.screens.ncm.panels.NavigateBar;
+import com.muoniumplayer.core.screens.ncm.panels.NavigationLoadingOverlay;
 import com.muoniumplayer.core.screens.ncm.panels.PlaylistPanel;
 import com.muoniumplayer.core.screens.ncm.panels.PersonalFmPanel;
 import com.muoniumplayer.core.screens.ncm.panels.PlayQueuePanel;
@@ -32,6 +33,7 @@ import com.muoniumplayer.core.utils.other.multithreading.MultiThreadingUtil;
 import java.awt.Color;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * @author IzumiiKonata
@@ -361,6 +363,17 @@ public class NCMScreen extends ExtensionScreen implements SharedConstants, Share
                 StencilClipManager.endClip();
             }
 
+            // 导航等待遮罩：盖在内容页之上，并且裁在内容区里 —— 失败提示可能比内容区还宽，
+            // 不裁会糊到左侧导航栏或控制栏上。
+            if (this.navigationLoading.isVisible()) {
+                StencilClipManager.beginClip(() -> Rect.draw(this.currentPanelBg.getX(), this.currentPanelBg.getY(),
+                        this.currentPanelBg.getWidth(), this.currentPanelBg.getHeight(), -1));
+                this.navigationLoading.render(this.currentPanelBg.getX(), this.currentPanelBg.getY(),
+                        this.currentPanelBg.getWidth(), this.currentPanelBg.getHeight(), alpha);
+                StencilClipManager.restoreActiveClip();
+                StencilClipManager.endClip();
+            }
+
             // 队列抽屉盖在内容页之上、控制栏之下，并且被裁剪在内容区域内，
             // 因此它的滑入滑出只会在播放器里发生，不会溢到外框上。
             if (this.playQueuePanel != null && this.playQueuePanel.isVisible()) {
@@ -522,6 +535,9 @@ public class NCMScreen extends ExtensionScreen implements SharedConstants, Share
     int currentActionPointer = 0;
     List<Runnable> actions = new ArrayList<>();
 
+    /** 导航等待遮罩。见 {@link #navigateAsync}。 */
+    private final NavigationLoadingOverlay navigationLoading = new NavigationLoadingOverlay();
+
     public void setCurrentPanel(NCMPanel panel) {
         this.innerSetCurrentPanel(panel, true);
 
@@ -544,6 +560,70 @@ public class NCMScreen extends ExtensionScreen implements SharedConstants, Share
                 }
             }
         }
+    }
+
+    /**
+     * 换页但<b>不新增历史记录</b>，而是覆盖当前这一条。
+     *
+     * <p>给"中转页"用：一个页面加载完就把用户送到别处时，历史里不该留下它。留下来的后果是按返回
+     * 会退回那个中转页，它的 {@code onInit} 又重新加载一次再把人送走 —— 返回键看起来失效。</p>
+     */
+    public void replaceCurrentPanel(NCMPanel panel) {
+        this.innerSetCurrentPanel(panel, true);
+        if (panel == null) return;
+
+        Runnable action = () -> this.innerSetCurrentPanel(panel, false);
+        if (actions.isEmpty()) {
+            currentActionPointer = 0;
+            actions.add(action);
+            return;
+        }
+        while (actions.size() > currentActionPointer + 1)
+            actions.remove(actions.size() - 1);
+        actions.set(currentActionPointer, action);
+    }
+
+    /**
+     * 先在当前页面之上转一枚加载转子，在工作线程取数据，最后<b>一次</b>切到目标页面。
+     *
+     * <p>导航栏里「排行榜」「最近播放」这类入口的目标页面取决于网络结果（有内容才有页面可去），
+     * 原来的做法是先切到一个空的中转面板显示"正在获取…"、数据回来再切一次 —— 用户看到两次页面
+     * 淡入，历史栈里还多了一条回不去的记录。改成这样以后只有一次切换、一条历史。</p>
+     *
+     * @param label  给用户看的目标名，例如「排行榜」；只用于文案
+     * @param loader <b>在工作线程</b>调用，返回要切去的面板；返回 {@code null} 表示没内容可展示，
+     *               此时留在当前页面并给一条会自动消失的提示。它的 {@code onInit} 仍由主线程调用，
+     *               所以 loader 里只该取数据、不要碰 GL
+     */
+    public void navigateAsync(String label, Supplier<NCMPanel> loader) {
+        if (loader == null) return;
+        // 等待期间忽略重复点击：连点会并发发出好几个同样的请求，最后还会互相覆盖切页。
+        if (this.navigationLoading.isLoading()) return;
+
+        final String targetName = label == null ? "" : label;
+        this.navigationLoading.beginLoading(targetName);
+        MultiThreadingUtil.runAsync(() -> {
+            NCMPanel loaded = null;
+            String failure = null;
+            try {
+                loaded = loader.get();
+            } catch (Throwable throwable) {
+                failure = throwable.getMessage();
+                System.err.println("[Music] 导航加载失败（" + targetName + "）: " + throwable);
+            }
+            final NCMPanel panel = loaded;
+            final String error = failure;
+            MultiThreadingUtil.runOnMainThread(() -> {
+                if (panel != null) {
+                    this.navigationLoading.clear();
+                    this.setCurrentPanel(panel);
+                    return;
+                }
+                this.navigationLoading.showMessage(error == null || error.trim().isEmpty()
+                        ? (targetName.isEmpty() ? "暂无可显示内容" : targetName + "暂无可显示内容")
+                        : "获取失败：" + error.trim());
+            });
+        });
     }
 
     /**

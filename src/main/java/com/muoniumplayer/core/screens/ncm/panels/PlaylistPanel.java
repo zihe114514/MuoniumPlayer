@@ -352,7 +352,7 @@ public class PlaylistPanel extends NCMPanel {
 
         // Keep the loading feedback above the clipped song list. The widget fades
         // itself out after the asynchronous request has finished.
-        PlaylistLoadingWidget loadingWidget = new PlaylistLoadingWidget();
+        PanelLoadingWidget loadingWidget = new PanelLoadingWidget("正在加载曲目…");
         this.addChild(loadingWidget);
         loadingWidget
                 .setClickable(false)
@@ -433,41 +433,7 @@ public class PlaylistPanel extends NCMPanel {
         return creator == null || currentUser == null || creator.getId() != currentUser.getId();
     }
 
-    /**
-     * A compact 12-segment activity indicator modeled after the iOS/macOS
-     * spinner. It deliberately contains no backdrop, so it feels integrated
-     * with every player theme rather than like a blocking dialog.
-     */
-    private static final class PlaylistLoadingWidget extends AbstractWidget<PlaylistLoadingWidget> {
-        private static final int SEGMENT_COUNT = 12;
-        private float rotation;
-
-        @Override
-        public void onRender(double mouseX, double mouseY) {
-            double centerX = this.getX() + this.getWidth() * .5;
-            double centerY = this.getY() + this.getHeight() * .5 - 12;
-
-            // RenderSystem frame delta is expressed in roughly 10 ms units.
-            rotation = (float) ((rotation + RenderSystem.getFrameDeltaTime() * 5.0) % 360.0);
-
-            for (int segment = 0; segment < SEGMENT_COUNT; segment++) {
-                float trail = 1f - segment / (float) SEGMENT_COUNT;
-                float segmentAlpha = this.getAlpha() * (.14f + .86f * trail * trail);
-
-                api.getGLStateManager().pushMatrix();
-                api.getGLStateManager().translate(centerX, centerY, 0);
-                api.getGLStateManager().rotate(rotation + segment * (360f / SEGMENT_COUNT), 0, 0, 1);
-                this.roundedRect(-1.65, -12, 3.3, 6.2, 1.65,
-                        RenderSystem.reAlpha(NCMScreen.getColor(NCMScreen.ColorType.ACCENT), segmentAlpha));
-                api.getGLStateManager().popMatrix();
-            }
-
-            String loadingText = "正在加载曲目…";
-            double textWidth = FontManager.pf14.getStringWidthD(loadingText);
-            FontManager.pf14.drawString(loadingText, centerX - textWidth * .5, centerY + 17,
-                    RenderSystem.reAlpha(NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT), this.getAlpha()));
-        }
-    }
+    // 转子的实现已提到 PanelLoadingWidget：主页、发现页、导航等待遮罩用的是同一个控件。
     private String formatDuration(long totalMillis) {
         long totalSeconds = totalMillis / 1000;
 

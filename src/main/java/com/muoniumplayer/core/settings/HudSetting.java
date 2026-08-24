@@ -42,7 +42,25 @@ public enum HudSetting {
     DYNAMIC_ISLAND_OVERSHOOT("入场回弹", 0.00f, 2.00f),
     DYNAMIC_ISLAND_SPINNER_SPEED("加载转速", 0.30f, 3.00f),
     DYNAMIC_ISLAND_AMBIENT_STATUS("常驻状态时长(s)", 2.00f, 30.00f),
-    DYNAMIC_ISLAND_AMBIENT_NOW_PLAYING("常驻歌曲时长(s)", 2.00f, 30.00f);
+    DYNAMIC_ISLAND_AMBIENT_NOW_PLAYING("常驻歌曲时长(s)", 2.00f, 30.00f),
+
+    // 移植自 folia-major 的各套「文字 PV」全屏歌词样式参数。区间取参考实现的可调范围。
+    LYRIC_FONT_SCALE("歌词字号", 0.60f, 1.80f),
+    LUMINOUS_WORD_SPACING("词距", 0.20f, 1.60f),
+    LUMINOUS_FLOAT("浮动幅度", 0.00f, 2.00f),
+    PARTITA_STAGGER_MIN("错落下限", 0.00f, 90.00f),
+    PARTITA_STAGGER_MAX("错落上限", 20.00f, 220.00f),
+    FUME_TEXT_HOLD("余韵留存", 0.40f, 2.50f),
+    FUME_CAMERA_SPEED("镜头速度", 0.40f, 2.50f),
+    FUME_HERO_SCALE("主行字号", 0.70f, 1.50f),
+    CAPPELLA_BUBBLE_WIDTH("气泡宽度", 0.50f, 0.95f),
+    CAPPELLA_EMOJI_CHANCE("表情频率", 0.00f, 0.45f),
+    TILT_SPLIT("分段概率", 0.00f, 1.00f),
+    TILT_STYLE("倾斜概率", 0.00f, 1.00f),
+    DIORAMA_DEPTH("景深间隔", 0.40f, 2.00f),
+    PENDOLO_ARC_RADIUS("弧半径", 0.25f, 0.70f),
+    PENDOLO_ARC_ANGLE("弧张角", 60.00f, 160.00f),
+    PENDOLO_ACTIVE_SCALE("当前行放大", 1.00f, 1.60f);
 
     private final String label;
     private final float min;
@@ -104,6 +122,22 @@ public enum HudSetting {
             case DYNAMIC_ISLAND_SPINNER_SPEED: return HudConfig.dynamicIslandSpinnerSpeed;
             case DYNAMIC_ISLAND_AMBIENT_STATUS: return HudConfig.dynamicIslandAmbientStatusSeconds;
             case DYNAMIC_ISLAND_AMBIENT_NOW_PLAYING: return HudConfig.dynamicIslandAmbientNowPlayingSeconds;
+            case LYRIC_FONT_SCALE: return HudConfig.lyricFontScale;
+            case LUMINOUS_WORD_SPACING: return HudConfig.luminousWordSpacing;
+            case LUMINOUS_FLOAT: return HudConfig.luminousFloatAmount;
+            case PARTITA_STAGGER_MIN: return HudConfig.partitaStaggerMin;
+            case PARTITA_STAGGER_MAX: return HudConfig.partitaStaggerMax;
+            case FUME_TEXT_HOLD: return HudConfig.fumeTextHoldRatio;
+            case FUME_CAMERA_SPEED: return HudConfig.fumeCameraSpeed;
+            case FUME_HERO_SCALE: return HudConfig.fumeHeroScale;
+            case CAPPELLA_BUBBLE_WIDTH: return HudConfig.cappellaBubbleWidth;
+            case CAPPELLA_EMOJI_CHANCE: return HudConfig.cappellaEmojiChance;
+            case TILT_SPLIT: return HudConfig.tiltSplitProbability;
+            case TILT_STYLE: return HudConfig.tiltStyleProbability;
+            case DIORAMA_DEPTH: return HudConfig.dioramaDepthSpread;
+            case PENDOLO_ARC_RADIUS: return HudConfig.pendoloArcRadius;
+            case PENDOLO_ARC_ANGLE: return HudConfig.pendoloArcAngle;
+            case PENDOLO_ACTIVE_SCALE: return HudConfig.pendoloActiveScale;
             default: throw new IllegalStateException("Unknown HUD setting: " + this);
         }
     }
@@ -147,6 +181,23 @@ public enum HudSetting {
             case DYNAMIC_ISLAND_SPINNER_SPEED: HudConfig.dynamicIslandSpinnerSpeed = clamped; break;
             case DYNAMIC_ISLAND_AMBIENT_STATUS: HudConfig.dynamicIslandAmbientStatusSeconds = clamped; break;
             case DYNAMIC_ISLAND_AMBIENT_NOW_PLAYING: HudConfig.dynamicIslandAmbientNowPlayingSeconds = clamped; break;
+            case LYRIC_FONT_SCALE: HudConfig.lyricFontScale = clamped; break;
+            case LUMINOUS_WORD_SPACING: HudConfig.luminousWordSpacing = clamped; break;
+            case LUMINOUS_FLOAT: HudConfig.luminousFloatAmount = clamped; break;
+            // 上下限互不越过：拖上限低于下限会让「区间随机」退化成常量，看起来像随机失效。
+            case PARTITA_STAGGER_MIN: HudConfig.partitaStaggerMin = Math.min(clamped, HudConfig.partitaStaggerMax); break;
+            case PARTITA_STAGGER_MAX: HudConfig.partitaStaggerMax = Math.max(clamped, HudConfig.partitaStaggerMin); break;
+            case FUME_TEXT_HOLD: HudConfig.fumeTextHoldRatio = clamped; break;
+            case FUME_CAMERA_SPEED: HudConfig.fumeCameraSpeed = clamped; break;
+            case FUME_HERO_SCALE: HudConfig.fumeHeroScale = clamped; break;
+            case CAPPELLA_BUBBLE_WIDTH: HudConfig.cappellaBubbleWidth = clamped; break;
+            case CAPPELLA_EMOJI_CHANCE: HudConfig.cappellaEmojiChance = clamped; break;
+            case TILT_SPLIT: HudConfig.tiltSplitProbability = clamped; break;
+            case TILT_STYLE: HudConfig.tiltStyleProbability = clamped; break;
+            case DIORAMA_DEPTH: HudConfig.dioramaDepthSpread = clamped; break;
+            case PENDOLO_ARC_RADIUS: HudConfig.pendoloArcRadius = clamped; break;
+            case PENDOLO_ARC_ANGLE: HudConfig.pendoloArcAngle = clamped; break;
+            case PENDOLO_ACTIVE_SCALE: HudConfig.pendoloActiveScale = clamped; break;
             default: throw new IllegalStateException("Unknown HUD setting: " + this);
         }
     }

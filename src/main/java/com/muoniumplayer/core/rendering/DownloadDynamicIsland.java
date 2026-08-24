@@ -4,6 +4,7 @@ import org.lwjgl.opengl.GL11;
 import com.muoniumplayer.core.interfaces.SharedConstants;
 import com.muoniumplayer.core.interfaces.SharedRenderingConstants;
 import com.muoniumplayer.core.management.FontManager;
+import com.muoniumplayer.core.ncm.music.AutomixSettings;
 import com.muoniumplayer.core.ncm.music.CloudMusic;
 import com.muoniumplayer.core.ncm.music.dto.Music;
 import com.muoniumplayer.core.rendering.font.CFontRenderer;
@@ -35,6 +36,29 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
     private static final double MIN_AUTO_TEXT_SCALE = .62;
     private static final double MAX_TEXT_SCALE = 1.18;
     private static final double CONTENT_CHANGE_SLIDE = 4.5;
+    /** 文案扫光一轮的时长。慢到不抢注意力，快到能看出是在动。 */
+    private static final long SHIMMER_PERIOD_MILLIS = 1600L;
+    /** 亮带宽度占整行宽度的比例。 */
+    private static final double SHIMMER_BAND = .34;
+    /** 亮带之外的基础不透明度；亮带中心补到 1.0。 */
+    private static final double SHIMMER_BASE_ALPHA = .80;
+    /**
+     * 智能过渡卡片在重叠时长之外多给的宽限，毫秒。
+     *
+     * <p>时效 = 本次重叠时长 + 这点宽限。宽限是为了覆盖「排在前面那张卡刚好还差半秒就播完」这种
+     * 临界情况：过渡刚结束时卡片仍算有效，再晚就作废。</p>
+     */
+    private static final long AUTOMIX_BLENDING_TTL_SLACK_MILLIS = 1_500L;
+    /**
+     * 液态玻璃的中性玻璃色，刻意<b>不</b>读 {@link NCMTheme#getAccentColor()}。
+     *
+     * <p>玻璃是一种材质而不是一处强调。用主题强调色去染整块表面的结果就是"液态玻璃被染色"：主题一换，
+     * 玻璃体、折射亮带、底部反射和边缘光会一起偏成同一个色调，看起来像有色塑料而不是玻璃。这里固定
+     * 一组偏冷的玻璃色；边缘光仍然按时间在色相环上转，所以"动态取色"的观感保留，只是不再被主题牵着走。</p>
+     */
+    private static final int GLASS_TINT = 0x8FB4EC;
+    /** 玻璃色的高光变体，用于折射亮带与边缘光的基准色相。 */
+    private static final int GLASS_TINT_BRIGHT = 0xCADEFB;
 
     /** Modern island silhouettes inspired by pill, glass, compact status and card surfaces. */
     public enum DynamicIslandStyle {
@@ -334,7 +358,12 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
      * 而那些数字既看不完也无从据此操作。完整明细仍然打在控制台的 {@code [Automix] handover} 一行里。</p>
      */
     public static void showAutomixHandover(String trackName) {
-        publishNotice(IslandNoticeType.AUTOMIX, "无缝切换", safeNoticeValue(trackName, "下一首"));
+        // 标题带扫光（见 renderNotice 的 shimmerTitle），排队方式仍是普通通知。
+        // 但它多了一条时效：这张卡片说的是「此刻正在过渡」，重叠期一结束就作废。与其在过渡早已
+        // 完成之后才从队尾冒出来误导人，不如干脆不显示 —— 这就是「不抢优先级，但也不留过期卡」。
+        publishNotice(IslandNoticeType.AUTOMIX_BLENDING, "智能过渡中",
+                safeNoticeValue(trackName, "下一首"), false,
+                AutomixSettings.getOverlapMillis() + AUTOMIX_BLENDING_TTL_SLACK_MILLIS);
     }
 
     /**
@@ -476,10 +505,20 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
     }
 
     private static void publishNotice(IslandNoticeType type, String title, String value, boolean persistent) {
+        publishNotice(type, title, value, persistent, 0L);
+    }
+
+    /**
+     * @param ttlMillis 这条通知的有效期，{@code <= 0} 表示永不过期。只对<b>排队等待中</b>的副本生效：
+     *                  超时的副本在出队时被丢弃，而不是过期了还照样弹出来
+     */
+    private static void publishNotice(IslandNoticeType type, String title, String value,
+                                      boolean persistent, long ttlMillis) {
         IslandNoticeType safeType = type == null ? IslandNoticeType.NONE : type;
         String safeTitle = safeNoticeValue(title, "状态");
         String safeValue = safeNoticeValue(value, "—");
         long now = System.currentTimeMillis();
+        long expiresAt = ttlMillis > 0L ? now + ttlMillis : 0L;
         synchronized (NOTICE_QUEUE_LOCK) {
             if (safeType == IslandNoticeType.NONE) {
                 NOTICE_QUEUE.clear();
@@ -487,20 +526,33 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
                 return;
             }
 
+            if (safeType == IslandNoticeType.AUTOMIX_BLENDING) {
+                // 一次交接只该有一张卡。自动接一次、用户紧接着又手动跳一次时，后来的信息更新，
+                // 先前那张直接作废；正在显示的同类卡片就地换成新歌名，而不是再排一张。
+                dropQueuedNoticesOfTypeLocked(safeType);
+                if (noticeType == safeType && !noticePersistent) {
+                    publishActiveNoticeLocked(safeType, safeTitle, safeValue, false,
+                            noticeUsesQueueInterval, now);
+                    return;
+                }
+            }
+
             if (noticeType != IslandNoticeType.NONE && isLowestPriorityNotice(safeType)) {
                 // NetEase listening-duration reports are background telemetry. Keep them behind
                 // every visible/user-facing notification rather than allowing them to interrupt it.
                 noticeUsesQueueInterval = noticeUsesQueueInterval || !noticePersistent;
                 markQueuedNoticesUseQueueIntervalLocked();
-                NOTICE_QUEUE.addLast(new QueuedNotice(safeType, safeTitle, safeValue, persistent, true));
+                NOTICE_QUEUE.addLast(new QueuedNotice(safeType, safeTitle, safeValue, persistent, true,
+                        expiresAt));
                 return;
             }
 
             if (noticeType != IslandNoticeType.NONE && isLowestPriorityNotice(noticeType)) {
                 // A later user-facing notification takes the active slot; defer the telemetry card
                 // to the tail so it remains strictly lowest priority even when it arrived first.
+                // 重新入队的是「当前正在显示的那张遥测卡」，它本身不带时效。
                 NOTICE_QUEUE.addLast(new QueuedNotice(noticeType, noticeTitle, noticeValue,
-                        noticePersistent, true));
+                        noticePersistent, true, 0L));
                 markQueuedNoticesUseQueueIntervalLocked();
                 publishActiveNoticeLocked(safeType, safeTitle, safeValue, persistent,
                         !bypassesNoticeQueue(safeType, persistent), now);
@@ -523,7 +575,8 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
             if (bypassesNoticeQueue(noticeType, noticePersistent)) {
                 boolean alreadyQueued = !NOTICE_QUEUE.isEmpty();
                 if (alreadyQueued) markQueuedNoticesUseQueueIntervalLocked();
-                NOTICE_QUEUE.addLast(new QueuedNotice(safeType, safeTitle, safeValue, persistent, alreadyQueued));
+                NOTICE_QUEUE.addLast(new QueuedNotice(safeType, safeTitle, safeValue, persistent,
+                        alreadyQueued, expiresAt));
                 return;
             }
 
@@ -531,8 +584,34 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
             // user-configured queue interval instead of the single-notice completion hold.
             noticeUsesQueueInterval = true;
             markQueuedNoticesUseQueueIntervalLocked();
-            NOTICE_QUEUE.addLast(new QueuedNotice(safeType, safeTitle, safeValue, persistent, true));
+            NOTICE_QUEUE.addLast(new QueuedNotice(safeType, safeTitle, safeValue, persistent, true,
+                    expiresAt));
         }
+    }
+
+    /** 丢掉队列里所有同类通知。用于「同一件事只保留最新那一张卡」。 */
+    private static void dropQueuedNoticesOfTypeLocked(IslandNoticeType type) {
+        java.util.Iterator<QueuedNotice> iterator = NOTICE_QUEUE.iterator();
+        while (iterator.hasNext()) {
+            if (iterator.next().type == type) iterator.remove();
+        }
+    }
+
+    /**
+     * 取下一条<b>仍然有效</b>的排队通知。
+     *
+     * <p>带时效的通知（目前只有智能过渡）过期就直接丢弃：它描述的是一件正在发生的事，等它排到时
+     * 事情已经结束了，弹出来只会误导。丢弃发生在出队这一刻，所以它既不会抢别人的位置，也不会
+     * 因为前面排了几张卡就把自己变成一张过期卡。</p>
+     *
+     * @return 下一条可显示的通知，队列里已经没有有效通知时返回 {@code null}
+     */
+    private static QueuedNotice pollNextNoticeLocked(long now) {
+        while (!NOTICE_QUEUE.isEmpty()) {
+            QueuedNotice next = NOTICE_QUEUE.removeFirst();
+            if (next.expiresAt <= 0L || now < next.expiresAt) return next;
+        }
+        return null;
     }
 
     /**
@@ -571,8 +650,9 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
     /** Preserves an interrupted ordinary notice so a live volume/status update cannot discard it. */
     private static void preserveActiveQueuedNoticeLocked() {
         if (noticeType == IslandNoticeType.NONE || bypassesNoticeQueue(noticeType, noticePersistent)) return;
+        // 被抢占的这张卡已经露过面了，把剩下的时长还给它就行，不再给它套时效。
         NOTICE_QUEUE.addFirst(new QueuedNotice(noticeType, noticeTitle, noticeValue,
-                noticePersistent, noticeUsesQueueInterval));
+                noticePersistent, noticeUsesQueueInterval, 0L));
     }
 
     private static void markQueuedNoticesUseQueueIntervalLocked() {
@@ -620,22 +700,24 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
                         transcodeProgress = 0.0;
                         publishActiveNoticeLocked(IslandNoticeType.PLAYBACK_ERROR, "转码无响应",
                                 "30 秒内解码进度没有变化 · 已结束提示", false, queueMode, now);
-                    } else if (!NOTICE_QUEUE.isEmpty()) {
+                    } else {
                         // Unknown channel: hand the island back to the waiting notices instead of
                         // pinning a card that has no terminal message of its own.
-                        QueuedNotice next = NOTICE_QUEUE.removeFirst();
-                        publishActiveNoticeLocked(next.type, next.title, next.value, next.persistent,
-                                next.useQueueInterval, now);
-                    } else {
-                        publishActiveNoticeLocked(IslandNoticeType.NONE, "", "", false, false, now);
+                        QueuedNotice next = pollNextNoticeLocked(now);
+                        if (next != null) {
+                            publishActiveNoticeLocked(next.type, next.title, next.value, next.persistent,
+                                    next.useQueueInterval, now);
+                        } else {
+                            publishActiveNoticeLocked(IslandNoticeType.NONE, "", "", false, false, now);
+                        }
                     }
                 }
                 return;
             }
             if (noticeShownAt <= 0L || now - noticeShownAt < noticeHoldMillis(noticeUsesQueueInterval)) return;
 
-            if (!NOTICE_QUEUE.isEmpty()) {
-                QueuedNotice next = NOTICE_QUEUE.removeFirst();
+            QueuedNotice next = pollNextNoticeLocked(now);
+            if (next != null) {
                 publishActiveNoticeLocked(next.type, next.title, next.value, next.persistent,
                         next.useQueueInterval, now);
                 return;
@@ -670,14 +752,17 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         private final String value;
         private final boolean persistent;
         private boolean useQueueInterval;
+        /** 出队后仍然有效的截止时刻；{@code <= 0} 表示永不过期。 */
+        private final long expiresAt;
 
         private QueuedNotice(IslandNoticeType type, String title, String value,
-                             boolean persistent, boolean useQueueInterval) {
+                             boolean persistent, boolean useQueueInterval, long expiresAt) {
             this.type = type;
             this.title = title;
             this.value = value;
             this.persistent = persistent;
             this.useQueueInterval = useQueueInterval;
+            this.expiresAt = expiresAt;
         }
     }
 
@@ -1104,7 +1189,7 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         roundedRect(x + 2.0, y + 3.0, width, height, radius,
                 hexColor(0f, 0f, 0f, shadowAlpha * .42f));
         if (liquidGlass) {
-            renderLiquidGlassSurface(x, y, width, height, radius, alpha, accentColor, now);
+            renderLiquidGlassSurface(x, y, width, height, radius, alpha, now);
         } else if (style == DynamicIslandStyle.GLASS) {
             roundedRect(x, y, width, height, radius, RenderSystem.reAlpha(accentColor, alpha * .20f));
             roundedRect(x + 1.0, y + 1.0, Math.max(1.0, width - 2.0), Math.max(1.0, height * .46),
@@ -1188,7 +1273,7 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
             roundedRect(iconX - iconPlate * .5, iconY - iconPlate * .5, iconPlate, iconPlate,
                     iconPlate * .5, hexColor(.020f, .026f, .038f, plateAlpha * (.60f + .36f * artworkMix)));
             roundedRect(iconX - iconPlate * .5, iconY - iconPlate * .5, iconPlate, iconPlate,
-                    iconPlate * .5, RenderSystem.reAlpha(accentColor,
+                    iconPlate * .5, RenderSystem.reAlpha(liquidGlass ? GLASS_TINT : accentColor,
                             plateAlpha * (liquidGlass ? .20f : .26f) * (1f - artworkMix)));
             if (liquidGlass) {
                 // 磨砂托盘：上亮下暗的一层反光，让图标像压在玻璃里而不是贴在表面。
@@ -1222,6 +1307,9 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         if (preview) textAlpha = alpha * (float) expansionValue * eventFade;
         boolean staticVolumeCopy = noticeMode && activeNoticeType == IslandNoticeType.VOLUME;
         boolean transcodeCopy = noticeMode && activeNoticeType == IslandNoticeType.TRANSCODING;
+        // 只有"正在进行的无缝重叠"这一条走扫光标题：它描述的是一件此刻仍在发生的事，
+        // 其余通知都是已经发生完的结果，扫光在它们身上只会变成噪音。
+        boolean shimmerTitle = noticeMode && activeNoticeType == IslandNoticeType.AUTOMIX_BLENDING;
         // Volume is frequently updated from key-repeat. Its labels deliberately skip both the
         // island-content entry and copy-transition animations, while the bar still interpolates.
         float renderedTextAlpha = staticVolumeCopy
@@ -1285,9 +1373,15 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
 
                     float incomingAlpha = textAlpha * (float) copyBlend;
                     if (incomingAlpha > .01f) {
-                        drawCenteredIslandText(FontManager.pf12, layout.title, textCenter,
-                                titleY + noticeSlide * (1.0 - copyBlend), availableWidth, layout.textScale,
-                                hexColor(.62f, .67f, .76f, incomingAlpha * .96f));
+                        if (shimmerTitle) {
+                            drawShimmerIslandText(FontManager.pf12, layout.title, textCenter,
+                                    titleY + noticeSlide * (1.0 - copyBlend), availableWidth,
+                                    layout.textScale, incomingAlpha * .96f, now);
+                        } else {
+                            drawCenteredIslandText(FontManager.pf12, layout.title, textCenter,
+                                    titleY + noticeSlide * (1.0 - copyBlend), availableWidth, layout.textScale,
+                                    hexColor(.62f, .67f, .76f, incomingAlpha * .96f));
+                        }
                         drawCenteredIslandText(FontManager.pf14bold, layout.value, textCenter,
                                 valueY + noticeSlide * (1.0 - copyBlend), availableWidth, layout.textScale,
                                 hexColor(1f, 1f, 1f, incomingAlpha));
@@ -1403,6 +1497,52 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         if (trimmed.isEmpty()) return;
         double textWidth = font.getStringWidthD(trimmed) * safeScale;
         font.drawString(trimmed, centerX - textWidth * .5, y, safeScale, color);
+    }
+
+    /**
+     * 扫光文案：一条窄亮带沿着文字反复掠过。只给"智能过渡中"这类正在进行的状态用。
+     *
+     * <p>刻意不用 scissor 裁一条亮带出来：灵动岛整层已经在一个缩放矩阵里，而 glScissor 吃的是窗口
+     * 像素坐标，裁剪框会跟着缩放与位置漂移。这里改成逐字符按"字符中心到亮带中心的距离"插值颜色，
+     * 视觉结果一样，且不引入任何 GL 状态切换，也不新增绘制批次。</p>
+     *
+     * <p>行宽用逐字符宽度的累加值而不是整串宽度：两者在本字体下应当相等，但排版一旦不等，
+     * 用累加值算出来的亮带位置仍然精确落在字符上。</p>
+     */
+    private void drawShimmerIslandText(CFontRenderer font, String text, double centerX, double y,
+                                        double maxWidth, double textScale, float alpha, long now) {
+        if (font == null || text == null || text.isEmpty() || alpha <= .01f) return;
+        if (maxWidth <= 1.0) return;
+        double safeScale = DynamicIslandMath.clamp(textScale, MIN_AUTO_TEXT_SCALE, MAX_TEXT_SCALE);
+        String trimmed = trimIslandText(font, text, maxWidth / safeScale);
+        if (trimmed.isEmpty()) return;
+
+        int length = trimmed.length();
+        double[] widths = new double[length];
+        double total = 0.0;
+        for (int index = 0; index < length; index++) {
+            widths[index] = font.getStringWidthD(trimmed.substring(index, index + 1)) * safeScale;
+            total += widths[index];
+        }
+        if (total <= .01) return;
+
+        // 亮带两端各留一个带宽的行程：每一轮都有"还没进来"和"已经出去"的间隙，读起来是掠过的光
+        // 而不是整行一起呼吸。
+        double sweep = ((now % SHIMMER_PERIOD_MILLIS) / (double) SHIMMER_PERIOD_MILLIS)
+                * (1.0 + SHIMMER_BAND * 2.0) - SHIMMER_BAND;
+        double cursor = centerX - total * .5;
+        double travelled = 0.0;
+        for (int index = 0; index < length; index++) {
+            double ratio = (travelled + widths[index] * .5) / total;
+            double distance = Math.abs(ratio - sweep) / SHIMMER_BAND;
+            double lit = distance >= 1.0 ? 0.0 : DynamicIslandMath.smoothStep(1.0 - distance);
+            font.drawString(trimmed.substring(index, index + 1), cursor, y, safeScale,
+                    hexColor((float) (.62 + .38 * lit), (float) (.67 + .33 * lit),
+                            (float) (.76 + .24 * lit),
+                            alpha * (float) (SHIMMER_BASE_ALPHA + (1.0 - SHIMMER_BASE_ALPHA) * lit)));
+            cursor += widths[index];
+            travelled += widths[index];
+        }
     }
 
     private String trimIslandText(CFontRenderer font, String text, double maxRawWidth) {
@@ -1785,7 +1925,8 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
                     RenderSystem.reAlpha(accentColor, alpha));
             return;
         }
-        if (type == IslandNoticeType.QUALITY || type == IslandNoticeType.AUTOMIX) {
+        if (type == IslandNoticeType.QUALITY || type == IslandNoticeType.AUTOMIX
+                || type == IslandNoticeType.AUTOMIX_BLENDING) {
             // A compact equalizer makes a playback-quality notice distinct from other status states.
             roundedRect(centerX - 5.1, centerY + 1.5, 2.2, 3.5, 1.1,
                     RenderSystem.reAlpha(accentColor, alpha));
@@ -1840,7 +1981,7 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         double rotation = preview ? (now / 7.0) % 360.0 : spinnerRotation;
         if (getStyle() == DynamicIslandStyle.LIQUID_GLASS) {
             // 液态玻璃有自己的加载动画；这里集中转发，通知图标那一路也能一起用上。
-            renderLiquidGlassSpinner(centerX, centerY, alpha, accentColor, rotation, now);
+            renderLiquidGlassSpinner(centerX, centerY, alpha, rotation, now);
             return;
         }
         // 先铺一圈极淡的轨道：慢转速下原来只看到一小截笔画在飘，很难认出是"正在加载"。
@@ -1873,23 +2014,25 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
     }
 
     /**
-     * 液态玻璃表面：半透明冷色基底 + 上半部折射亮带 + 一条缓慢横扫的镜面反光，
-     * 外沿是一圈按时间旋转色相的动态取色光。
+     * 液态玻璃表面：半透明冷色基底 + 上半部折射亮带 + 底部回弹反射，外沿是一圈按时间旋转色相的光。
      *
      * <p>所有笔触都用圆角矩形与其渐变版本绘制，因此天然贴合灵动岛轮廓，不会像径向光斑那样
      * 溢出边界；也没有额外的 GL 状态切换，与既有样式共用同一层状态隔离。</p>
+     *
+     * <p>取色一律来自 {@link #GLASS_TINT}/{@link #GLASS_TINT_BRIGHT} 而不是主题强调色：玻璃不该跟着
+     * 主题整体偏色。原来那条来回横扫的镜面反光已按要求移除。</p>
      */
     private void renderLiquidGlassSurface(double x, double y, double width, double height,
-                                         double radius, float alpha, int accentColor, long now) {
+                                         double radius, float alpha, long now) {
         double seconds = now / 1000.0;
-        int accentBright = DynamicIslandMath.brightenAccent(accentColor, .34f) & 0xFFFFFF;
+        int accentBright = GLASS_TINT_BRIGHT;
         double innerRadius = Math.max(1.0, radius - 1.0);
 
-        // 玻璃本体：偏冷的深色基底压住背景，再叠一层强调色的竖向渐变当作体积感。
+        // 玻璃本体：偏冷的深色基底压住背景，再叠一层玻璃色的竖向渐变当作体积感。
         roundedRect(x, y, width, height, radius, hexColor(.043f, .055f, .078f, alpha * .82f));
         roundedRectGradientVertical(x, y, width, height, radius,
                 DynamicIslandMath.colorWithAlpha(accentBright, alpha * .17f),
-                DynamicIslandMath.colorWithAlpha(accentColor, alpha * .07f));
+                DynamicIslandMath.colorWithAlpha(GLASS_TINT, alpha * .07f));
         // 冷白到紫蓝的横向色散。这里不用 drawGradientCornerLR：它的混合角会被算成完全不透明，
         // 放在半透明的玻璃上会糊成两块实色。
         roundedRectGradientHorizontal(x, y, width, height, radius,
@@ -1906,21 +2049,10 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
                 new Color(255, 255, 255, 0),
                 DynamicIslandMath.colorWithAlpha(accentBright, alpha * .13f));
 
-        // 镜面反光：一条两侧渐隐的窄光带来回扫过，速度很慢，不会干扰读字。
-        double streakWidth = Math.max(12.0, width * .18);
-        double travel = Math.max(0.0, width - streakWidth - radius);
-        double streakX = x + radius * .5 + (.5 + .5 * Math.sin(seconds * .82)) * travel;
-        double streakHalf = streakWidth * .5;
-        float streakAlpha = alpha * 34f;
-        roundedRectGradientHorizontal(streakX, y + 1.4, streakHalf, Math.max(1.0, height - 2.8),
-                streakHalf * .5, new Color(255, 255, 255, 0),
-                new Color(255, 255, 255, DynamicIslandMath.clamp255(streakAlpha)));
-        roundedRectGradientHorizontal(streakX + streakHalf, y + 1.4, streakHalf,
-                Math.max(1.0, height - 2.8), streakHalf * .5,
-                new Color(255, 255, 255, DynamicIslandMath.clamp255(streakAlpha)),
-                new Color(255, 255, 255, 0));
+        // 原来这里有一条来回横扫的镜面反光（扫光）。已按要求移除：它在读字时会周期性压过文案，
+        // 而玻璃的体积感由上面的折射亮带与下面的边缘光已经交代清楚了。
 
-        // 边缘动态取色：四角取自主题强调色的四个色相相位，整圈随时间缓慢转动。
+        // 边缘动态取色：四角取自玻璃色的四个色相相位，整圈随时间缓慢转动。
         float phase = (float) ((seconds * 26.0) % 360.0);
         roundedOutlineGradient(x, y, width, height, radius, 1.0,
                 DynamicIslandMath.colorWithAlpha(DynamicIslandMath.shiftHue(accentBright, phase), alpha * .80f),
@@ -1936,8 +2068,9 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
      * 以及中心随呼吸缩放的光点。全部由旋转后的圆角矩形组成，1.8.9 的固定管线可以直接吃下。
      */
     private void renderLiquidGlassSpinner(double centerX, double centerY, float alpha,
-                                          int accentColor, double rotation, long now) {
-        int accentBright = DynamicIslandMath.brightenAccent(accentColor, .30f) & 0xFFFFFF;
+                                          double rotation, long now) {
+        // 同样固定用玻璃色：加载环是玻璃里的一部分，跟着主题偏色就和表面对不上了。
+        int accentBright = GLASS_TINT_BRIGHT;
         double seconds = now / 1000.0;
 
         // 外圈刻度：固定不动，给旋转体一个可参照的"玻璃环"。
@@ -2088,6 +2221,8 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         GD_SOURCE_HEALTHY,
         GD_SOURCE_ERROR,
         AUTOMIX,
+        /** 无缝重叠正在进行：两首歌同时出声的那几秒。文案带扫光，和已就绪/开关提示区分开。 */
+        AUTOMIX_BLENDING,
         PLAY_NEXT,
         PLAYBACK_TOGGLE
     }

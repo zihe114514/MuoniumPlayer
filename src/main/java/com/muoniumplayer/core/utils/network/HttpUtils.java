@@ -190,6 +190,25 @@ public class HttpUtils {
                 return inputStream.read();
             }
 
+            /*
+             * 必须转发批量读：InputStream 的默认实现是「循环调用 read()」，于是每一个字节都要多走
+             * 一层虚调用。所有走 HttpUtils 的传输（歌曲下载、封面、歌词、搜索 JSON）都经过这里，
+             * 音频动辄几 MB，逐字节转发一度是整条链路上最贵的一段。
+             */
+            @Override
+            public int read(byte[] buffer, int offset, int length) throws IOException {
+                return inputStream.read(buffer, offset, length);
+            }
+
+            @Override
+            public long skip(long count) throws IOException {
+                return inputStream.skip(count);
+            }
+
+            /*
+             * 语义保持不变：返回的是响应声明的总长度而不是「当前可无阻塞读取的字节数」。
+             * WrappedInputStream 的进度分母、ShaderSource 的初始缓冲区容量都依赖这个既有行为。
+             */
             @Override
             public int available() {
                 return contentLength;
@@ -230,6 +249,17 @@ public class HttpUtils {
             @Override
             public int read() throws IOException {
                 return inputStream.read();
+            }
+
+            /** 同 {@code request}：不转发批量读会退化成逐字节。 */
+            @Override
+            public int read(byte[] buffer, int offset, int length) throws IOException {
+                return inputStream.read(buffer, offset, length);
+            }
+
+            @Override
+            public long skip(long count) throws IOException {
+                return inputStream.skip(count);
             }
 
             @Override

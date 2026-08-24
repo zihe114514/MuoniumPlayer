@@ -24,7 +24,7 @@ public final class HudConfig {
     public static final int DYNAMIC_ISLAND_STYLE_MAX = 6;
 
     /** 全屏歌词样式索引上限,与 {@code FullscreenLyricStyle} 的数量保持一致。 */
-    public static final int FULLSCREEN_LYRIC_STYLE_MAX = 1;
+    public static final int FULLSCREEN_LYRIC_STYLE_MAX = 8;
 
     private static final File FILE = ConfigPaths.HUD;
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -128,6 +128,99 @@ public final class HudConfig {
 
     /** 打满这么多拍换下一个颜色。拍是实时包络数出来的，不是 BPM 推的。 */
     public static int cadenzaBeatsPerColor = 4;
+
+    /**
+     * 全屏歌词「文字 PV」样式的字号倍率。
+     *
+     * <p>各样式的字号本来都由 {@code FullscreenLyricStage.baseFontPx} 按视口算出来，这一项在那之上
+     * 再乘一次，于是「觉得字太大/太小」不用去动每套样式各自的参数。</p>
+     *
+     * <p>只作用于移植过来的那几套样式：「逐行滚动」有自己的整行/普通缩放滑块，「律动词云」是自动挑
+     * 字号档位的（挑不到比最大档更大的档），硬接上来会出现「往大调没反应」，所以不接。</p>
+     */
+    public static float lyricFontScale = 1.00f;
+
+    // ---- 移植自 folia-major 的各套「文字 PV」全屏歌词样式的可调参数 ----
+    // 默认值取参考实现的 DEFAULT_*_TUNING，只有少数几项按本项目的视口尺寸重新标定（见各自注释）。
+
+    /** 流光：字词之间的间距系数。 */
+    public static float luminousWordSpacing = 0.70f;
+
+    /** 流光：整块随呼吸/节拍上下浮动的倍率，0 表示完全静止。 */
+    public static float luminousFloatAmount = 1.00f;
+
+    /** 流光：是否给每个字词一个小角度的静态旋转。 */
+    public static boolean luminousWordRotation = true;
+
+    /** 云阶：每一级左右错落量的下限（参考实现单位是像素，渲染层再按视口比例缩放）。 */
+    public static float partitaStaggerMin = 20.0f;
+
+    /** 云阶：每一级左右错落量的上限。 */
+    public static float partitaStaggerMax = 100.0f;
+
+    /** 云阶：是否画每一级外侧的指示线。 */
+    public static boolean partitaGuideLines = true;
+
+    /** 浮名：唱过的段落淡到底色需要多久的倍率，越大留得越久。 */
+    public static float fumeTextHoldRatio = 1.00f;
+
+    /** 浮名：镜头跟随速度倍率。 */
+    public static float fumeCameraSpeed = 1.00f;
+
+    /** 浮名：主行字号倍率。 */
+    public static float fumeHeroScale = 1.00f;
+
+    /** 浮名：是否画背景几何体。参考实现默认关闭。 */
+    public static boolean fumeGeometricBackground = false;
+
+    /** 群唱：气泡最大宽度占视口宽度的比例。 */
+    public static float cappellaBubbleWidth = 0.72f;
+
+    /**
+     * 群唱：头像来源。{@code 0} = 专辑封面，{@code 1} = 主题色圆，{@code 2} = 内置头像（默认）。
+     *
+     * <p>内置头像取自参考实现的 folia-chan 素材（AI 生成，其 README 声明不受该仓库 AGPL 约束），
+     * 重新压成一张 384×192 的 4×2 精灵图，8 个头像共 54 KB。</p>
+     */
+    public static int cappellaAvatarSource = 2;
+
+    /** 群唱：是否在歌词之间随机插入表情气泡。 */
+    public static boolean cappellaEmojiEnabled = true;
+
+    /**
+     * 群唱：单条歌词后面插入表情气泡的概率。
+     *
+     * <p>还有两道硬约束在渲染器里：相邻表情至少隔 2 条歌词，且一屏窗口里最多占 1/6。
+     * 光靠概率会出现「连着刷五张」的情况，参考实现同样是概率 + 间隔 + 配额三件套。</p>
+     */
+    public static float cappellaEmojiChance = 0.18f;
+
+    /** 倾诉：把一行拆成多段的概率系数。 */
+    public static float tiltSplitProbability = 0.75f;
+
+    /** 倾诉：某一段采用「斜体 + 拉开字距 + 逐字错动」的概率。 */
+    public static float tiltStyleProbability = 0.35f;
+
+    /** 倾诉：配色方案。0 = 普通段主色 / 斜体段强调色，1 = 互换，2 = 全强调色，3 = 全主色。 */
+    public static int tiltColorScheme = 0;
+
+    /** 镜台：景深间隔倍率，越大层次拉得越开。 */
+    public static float dioramaDepthSpread = 1.00f;
+
+    /** 镜台：是否画浮尘粒子。 */
+    public static boolean dioramaDust = true;
+
+    /** 时计：弧半径占视口短边的比例。 */
+    public static float pendoloArcRadius = 0.42f;
+
+    /** 时计：可见弧的张角，度。 */
+    public static float pendoloArcAngle = 100.0f;
+
+    /** 时计：当前行的放大倍率。 */
+    public static float pendoloActiveScale = 1.25f;
+
+    /** 时计：是否画左侧的齿轮刻度装饰。 */
+    public static boolean pendoloGearDecor = true;
 
     // OSD KTV animation. These values are independent from the full-screen lyric renderer.
     public static float osdKaraokeTransitionWidth = 14.0f;
@@ -274,6 +367,30 @@ public final class HudConfig {
         cadenzaDecorColors = CADENZA_DEFAULT_COLORS.clone();
         cadenzaDecorColorCount = 4;
         cadenzaBeatsPerColor = 4;
+        lyricFontScale = 1.00f;
+        luminousWordSpacing = 0.70f;
+        luminousFloatAmount = 1.00f;
+        luminousWordRotation = true;
+        partitaStaggerMin = 20.0f;
+        partitaStaggerMax = 100.0f;
+        partitaGuideLines = true;
+        fumeTextHoldRatio = 1.00f;
+        fumeCameraSpeed = 1.00f;
+        fumeHeroScale = 1.00f;
+        fumeGeometricBackground = false;
+        cappellaBubbleWidth = 0.72f;
+        cappellaAvatarSource = 2;
+        cappellaEmojiEnabled = true;
+        cappellaEmojiChance = 0.18f;
+        tiltSplitProbability = 0.75f;
+        tiltStyleProbability = 0.35f;
+        tiltColorScheme = 0;
+        dioramaDepthSpread = 1.00f;
+        dioramaDust = true;
+        pendoloArcRadius = 0.42f;
+        pendoloArcAngle = 100.0f;
+        pendoloActiveScale = 1.25f;
+        pendoloGearDecor = true;
         osdKaraokeTransitionWidth = 14.0f;
         osdKaraokeGlowStrength = 0.68f;
         osdKaraokeBloomStrength = 0.46f;
@@ -363,6 +480,31 @@ public final class HudConfig {
                     CADENZA_BEATS_PER_COLOR_MIN, CADENZA_BEATS_PER_COLOR_MAX);
             cadenzaDecorColors = getRgbArray(o, "cadenzaDecorColors", cadenzaDecorColors);
 
+            lyricFontScale = clamp(getFloat(o, "lyricFontScale", lyricFontScale), 0.60f, 1.80f);
+            luminousWordSpacing = clamp(getFloat(o, "luminousWordSpacing", luminousWordSpacing), 0.20f, 1.60f);
+            luminousFloatAmount = clamp(getFloat(o, "luminousFloatAmount", luminousFloatAmount), 0.0f, 2.0f);
+            luminousWordRotation = getBoolean(o, "luminousWordRotation", luminousWordRotation);
+            partitaStaggerMin = clamp(getFloat(o, "partitaStaggerMin", partitaStaggerMin), 0.0f, 90.0f);
+            partitaStaggerMax = clamp(getFloat(o, "partitaStaggerMax", partitaStaggerMax), 20.0f, 220.0f);
+            partitaGuideLines = getBoolean(o, "partitaGuideLines", partitaGuideLines);
+            fumeTextHoldRatio = clamp(getFloat(o, "fumeTextHoldRatio", fumeTextHoldRatio), 0.40f, 2.50f);
+            fumeCameraSpeed = clamp(getFloat(o, "fumeCameraSpeed", fumeCameraSpeed), 0.40f, 2.50f);
+            fumeHeroScale = clamp(getFloat(o, "fumeHeroScale", fumeHeroScale), 0.70f, 1.50f);
+            fumeGeometricBackground = getBoolean(o, "fumeGeometricBackground", fumeGeometricBackground);
+            cappellaBubbleWidth = clamp(getFloat(o, "cappellaBubbleWidth", cappellaBubbleWidth), 0.50f, 0.95f);
+            cappellaAvatarSource = clampInt(getInt(o, "cappellaAvatarSource", cappellaAvatarSource), 0, 2);
+            cappellaEmojiEnabled = getBoolean(o, "cappellaEmojiEnabled", cappellaEmojiEnabled);
+            cappellaEmojiChance = clamp(getFloat(o, "cappellaEmojiChance", cappellaEmojiChance), 0.00f, 0.45f);
+            tiltSplitProbability = clamp01(getFloat(o, "tiltSplitProbability", tiltSplitProbability));
+            tiltStyleProbability = clamp01(getFloat(o, "tiltStyleProbability", tiltStyleProbability));
+            tiltColorScheme = clampInt(getInt(o, "tiltColorScheme", tiltColorScheme), 0, 3);
+            dioramaDepthSpread = clamp(getFloat(o, "dioramaDepthSpread", dioramaDepthSpread), 0.40f, 2.00f);
+            dioramaDust = getBoolean(o, "dioramaDust", dioramaDust);
+            pendoloArcRadius = clamp(getFloat(o, "pendoloArcRadius", pendoloArcRadius), 0.25f, 0.70f);
+            pendoloArcAngle = clamp(getFloat(o, "pendoloArcAngle", pendoloArcAngle), 60.0f, 160.0f);
+            pendoloActiveScale = clamp(getFloat(o, "pendoloActiveScale", pendoloActiveScale), 1.00f, 1.60f);
+            pendoloGearDecor = getBoolean(o, "pendoloGearDecor", pendoloGearDecor);
+
             osdKaraokeTransitionWidth = clamp(getFloat(o, "osdKaraokeTransitionWidth", osdKaraokeTransitionWidth), 4.0f, 32.0f);
             osdKaraokeGlowStrength = clamp01(getFloat(o, "osdKaraokeGlowStrength", osdKaraokeGlowStrength));
             osdKaraokeBloomStrength = clamp01(getFloat(o, "osdKaraokeBloomStrength", osdKaraokeBloomStrength));
@@ -449,6 +591,30 @@ public final class HudConfig {
             o.addProperty("cadenzaDecorColorCount", cadenzaDecorColorCount);
             o.addProperty("cadenzaBeatsPerColor", cadenzaBeatsPerColor);
             o.add("cadenzaDecorColors", rgbArray(cadenzaDecorColors));
+            o.addProperty("lyricFontScale", lyricFontScale);
+            o.addProperty("luminousWordSpacing", luminousWordSpacing);
+            o.addProperty("luminousFloatAmount", luminousFloatAmount);
+            o.addProperty("luminousWordRotation", luminousWordRotation);
+            o.addProperty("partitaStaggerMin", partitaStaggerMin);
+            o.addProperty("partitaStaggerMax", partitaStaggerMax);
+            o.addProperty("partitaGuideLines", partitaGuideLines);
+            o.addProperty("fumeTextHoldRatio", fumeTextHoldRatio);
+            o.addProperty("fumeCameraSpeed", fumeCameraSpeed);
+            o.addProperty("fumeHeroScale", fumeHeroScale);
+            o.addProperty("fumeGeometricBackground", fumeGeometricBackground);
+            o.addProperty("cappellaBubbleWidth", cappellaBubbleWidth);
+            o.addProperty("cappellaAvatarSource", cappellaAvatarSource);
+            o.addProperty("cappellaEmojiEnabled", cappellaEmojiEnabled);
+            o.addProperty("cappellaEmojiChance", cappellaEmojiChance);
+            o.addProperty("tiltSplitProbability", tiltSplitProbability);
+            o.addProperty("tiltStyleProbability", tiltStyleProbability);
+            o.addProperty("tiltColorScheme", tiltColorScheme);
+            o.addProperty("dioramaDepthSpread", dioramaDepthSpread);
+            o.addProperty("dioramaDust", dioramaDust);
+            o.addProperty("pendoloArcRadius", pendoloArcRadius);
+            o.addProperty("pendoloArcAngle", pendoloArcAngle);
+            o.addProperty("pendoloActiveScale", pendoloActiveScale);
+            o.addProperty("pendoloGearDecor", pendoloGearDecor);
             o.addProperty("osdKaraokeTransitionWidth", osdKaraokeTransitionWidth);
             o.addProperty("osdKaraokeGlowStrength", osdKaraokeGlowStrength);
             o.addProperty("osdKaraokeBloomStrength", osdKaraokeBloomStrength);

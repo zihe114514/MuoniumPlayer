@@ -73,8 +73,35 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
 
     /** 左上角「A-Z」逐字特效快捷面板；只影响全屏歌词页的两项配置，实时预览。 */
     private final LyricStyleQuickPanel styleQuickPanel = new LyricStyleQuickPanel();
-    /** 「律动词云」样式的渲染器。经典样式下它完全不参与绘制，也不持有任何状态。 */
-    private final CadenzaLyricRenderer cadenzaRenderer = new CadenzaLyricRenderer();
+    /**
+     * 除「逐行滚动」以外的各套样式的渲染器，下标与 {@link FullscreenLyricStyle} 的序号一一对应
+     * （{@code CLASSIC} 那一位固定为 {@code null}，它走下面经典样式的整套流程）。
+     *
+     * <p>为什么全部提前 new 好：这些对象只持有布局缓存与几个动画量，构造代价可以忽略，
+     * 而按需创建就得在渲染热路径上做判空 + 赋值，还会在切样式的那一帧多一次 GC 压力。</p>
+     */
+    private final FullscreenLyricRenderer[] styleRenderers = buildStyleRenderers();
+
+    private static FullscreenLyricRenderer[] buildStyleRenderers() {
+        FullscreenLyricRenderer[] renderers =
+                new FullscreenLyricRenderer[FullscreenLyricStyle.values().length];
+        renderers[FullscreenLyricStyle.CADENZA.ordinal()] = new CadenzaLyricRenderer();
+        renderers[FullscreenLyricStyle.FUME.ordinal()] = new FumeLyricRenderer();
+        renderers[FullscreenLyricStyle.LUMINOUS.ordinal()] = new LuminousLyricRenderer();
+        renderers[FullscreenLyricStyle.PARTITA.ordinal()] = new PartitaLyricRenderer();
+        renderers[FullscreenLyricStyle.CAPPELLA.ordinal()] = new CappellaLyricRenderer();
+        renderers[FullscreenLyricStyle.TILT.ordinal()] = new TiltLyricRenderer();
+        renderers[FullscreenLyricStyle.DIORAMA.ordinal()] = new DioramaLyricRenderer();
+        renderers[FullscreenLyricStyle.PENDOLO.ordinal()] = new PendoloLyricRenderer();
+        return renderers;
+    }
+
+    /** 当前样式对应的渲染器；{@code null} 表示走经典的滚动歌词。 */
+    private FullscreenLyricRenderer currentStyleRenderer() {
+        int index = FullscreenLyricStyle.current().ordinal();
+        if (index < 0 || index >= styleRenderers.length) return null;
+        return styleRenderers[index];
+    }
 
     ScrollText stMusicName = new ScrollText(), stArtists = new ScrollText();
     IconWidget playPauseButton = new IconWidget("G", FontManager.music40, 0, 0, 24, 24);
@@ -381,8 +408,10 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
 
     public void onInit() {
         resetLyricStatus();
-        // 换歌重开歌词页时清掉词云的上一行状态，否则会看到上一首的字词退场一次。
-        cadenzaRenderer.reset();
+        // 换歌重开歌词页时清掉各样式的上一行状态，否则会看到上一首的内容退场一次。
+        for (int i = 0; i < styleRenderers.length; i++) {
+            if (styleRenderers[i] != null) styleRenderers[i].reset();
+        }
     }
 
     public void close() {
@@ -435,6 +464,9 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
     private void renderLyrics(double mouseX, double mouseY, double posX, double posY, double width, double height, int dWheel, float alpha, CloudMusic.PlaybackSnapshot snapshot) {
 
         if (CloudMusic.lyrics.isEmpty()) return;
+        // 切歌后歌词还没回来时，列表里躺着的是上一首的时间轴。宁可这一瞬空着，也不要用新歌的
+        // 进度去画旧歌的行 —— 那才是用户看到的"切歌歌词不同步"。
+        if (!CloudMusic.lyricsMatchCurrentTrack()) return;
 
         boolean playerNotReady = snapshot.player == null;
         double totalTimeMillis = snapshot.durationMs;
@@ -447,10 +479,11 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
         double lyricsWidth = lyricViewport.width;
         LyricLine displayedCurrentLyric = progressBarDragging ? CloudMusic.findCurrentLyric(overridePlaybackProgress) : CloudMusic.currentLyric;
 
-        // 「律动词云」是一套独立的绘制方式：只画当前行、不滚动、不做 KTV 填涂，
+        // 除「逐行滚动」以外的样式都是独立的绘制方式（不滚动、不做 KTV 填涂），
         // 因此在这里就整段接管，下面经典样式的滚动、模糊、译文与 FBO 合成一律不执行。
-        if (FullscreenLyricStyle.current() == FullscreenLyricStyle.CADENZA) {
-            this.cadenzaRenderer.render(lyricViewport.left, lyricViewport.top,
+        FullscreenLyricRenderer styleRenderer = currentStyleRenderer();
+        if (styleRenderer != null) {
+            styleRenderer.render(lyricViewport.left, lyricViewport.top,
                     lyricViewport.width, lyricViewport.height, alpha, songProgress, displayedCurrentLyric);
             return;
         }

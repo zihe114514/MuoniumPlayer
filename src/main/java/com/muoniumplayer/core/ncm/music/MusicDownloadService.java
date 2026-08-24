@@ -94,10 +94,20 @@ final class MusicDownloadService {
                         }
                     });
 
+            /*
+             * 必须 try/finally 关流。原来是「writeTo 之后再 close」：一旦传输中途抛异常（CDN 断流、
+             * 读超时），output 就一直开着，而 catch 分支紧接着要 music.delete() —— Windows 上删除
+             * 一个仍被本进程打开的文件必然失败，于是磁盘上留下一个长度不对的半成品，下一次播放
+             * 直接拿它去解码。stream 一并关掉，否则连接也回不到池里。
+             */
             OutputStream output = Files.newOutputStream(music.toPath(), StandardOpenOption.CREATE,
                     StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-            writeTo(stream, output);
-            output.close();
+            try {
+                writeTo(stream, output);
+            } finally {
+                closeQuietly(output);
+                closeQuietly(stream);
+            }
             MuoniumPlayerExtension.getInstance().musicInfo.downloadProgress = 1.0;
             MuoniumPlayerExtension.getInstance().musicInfo.downloading = false;
             DownloadDynamicIsland.finishDownload();
@@ -109,9 +119,25 @@ final class MusicDownloadService {
         }
     }
 
+    private static void closeQuietly(java.io.Closeable closeable) {
+        if (closeable == null) return;
+        try {
+            closeable.close();
+        } catch (Throwable ignored) {
+            // 关流失败无法补救，也不该盖掉传输阶段真正的异常。
+        }
+    }
+
+    /**
+     * 音频体积在几 MB 到几十 MB，1 KB 的搬运缓冲区意味着一次下载要来回几万次；同时
+     * {@link WrappedInputStream} 的进度回调是按块触发的，块太小回调本身就成了开销。
+     * 64 KB 与磁盘写入的簇大小同量级，再往上收益就平了。
+     */
+    private static final int TRANSFER_BUFFER_BYTES = 64 * 1024;
+
     @SneakyThrows
     static void writeTo(InputStream source, OutputStream destination) {
-        byte[] buffer = new byte[1024];
+        byte[] buffer = new byte[TRANSFER_BUFFER_BYTES];
         int length;
         while ((length = source.read(buffer)) != -1) {
             destination.write(buffer, 0, length);

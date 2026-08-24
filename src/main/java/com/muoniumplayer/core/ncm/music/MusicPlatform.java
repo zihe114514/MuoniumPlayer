@@ -6,6 +6,7 @@ package com.muoniumplayer.core.ncm.music;
 public enum MusicPlatform {
     NETEASE("网易云", 0xE94747),
     QQ("QQ音乐", 0x31C27C),
+    KUGOU("酷狗音乐", 0x1F9CF0),
     GD("GD音乐台", 0x3D5AFE);
 
     private final String displayName;
@@ -24,6 +25,19 @@ public enum MusicPlatform {
         return brandColor;
     }
 
+    /**
+     * 该平台是否由 Cadence（{@code music-api} 库）承载。
+     *
+     * <p>酷狗与 GD 都是宿主自己实现的，{@link #toCadenceSource()} 对它们只能给出一个不正确的兜底值；
+     * 任何要走 Cadence 的调用点都必须先问这个方法，而不是直接转换。</p>
+     */
+    public boolean isCadenceBacked() {
+        return this == NETEASE || this == QQ;
+    }
+
+    /**
+     * @deprecated 只对 {@link #isCadenceBacked()} 为真的平台有意义；其余平台会落到 NETEASE 兜底。
+     */
     public top.fpsmaster.music.MusicSource toCadenceSource() {
         return this == QQ ? top.fpsmaster.music.MusicSource.QQ : top.fpsmaster.music.MusicSource.NETEASE;
     }

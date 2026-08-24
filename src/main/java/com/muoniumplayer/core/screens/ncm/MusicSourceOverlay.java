@@ -51,17 +51,20 @@ public final class MusicSourceOverlay extends NCMPanel {
         choosingGdPlatform = false;
         getChildren().clear();
 
-        Panel dialog = createDialog(452, 352);
+        Panel dialog = createDialog(452, 418);
         addTitle(dialog, "音乐来源", "官方音乐源与 GD音乐台 在线聚合源可独立切换");
 
         // 分组标题 / 卡片的纵向节奏：标题下 20 起第一张卡，两张卡之间留 8，换分组前留 14。
         // 原来两张官方卡之间只有 4，挨在一起像一整块；分组之间反而比卡片间距还紧。
+        // 加入酷狗之后官方分组从两张变三张，下面的分组标题与 GD 卡片整体下移 66（= 卡高 58 + 间距 8），
+        // 对话框高度同步 +66，底部那行说明文字仍按 height-26 贴底，不需要另外挪。
         addSectionLabel(dialog, "官方音乐源", 68);
         addContentSource(dialog, MusicPlatform.NETEASE, 88);
         addContentSource(dialog, MusicPlatform.QQ, 154);
+        addContentSource(dialog, MusicPlatform.KUGOU, 220);
 
-        addSectionLabel(dialog, "在线聚合源", 226);
-        addGdContentSource(dialog, 246);
+        addSectionLabel(dialog, "在线聚合源", 292);
+        addGdContentSource(dialog, 312);
 
         LabelWidget detail = new LabelWidget("GD音乐台来源由 music-api.gdstudio.xyz 提供；请按上游服务的使用要求使用。", FontManager.pf12);
         dialog.addChild(detail);
@@ -286,15 +289,19 @@ public final class MusicSourceOverlay extends NCMPanel {
 
         // 品牌字形必须配对到自己那份字体：music-brand-icons 里没有 U+E888（QQ 音乐的标记），
         // 原来两个平台都用 musicBrand18 去取，QQ 那一枚落到兜底字体上、画出来是空白。
+        // 酷狗两份图标字体里都没有，所以用正文字体画一枚汉字字标（见 MusicBrandIcons.KUGOU_MONOGRAM）。
         final boolean qq = platform == MusicPlatform.QQ;
-        final String brandGlyph = qq ? MusicBrandIcons.QQ_MUSIC : MusicBrandIcons.NETEASE_CLOUD_MUSIC;
-        LabelWidget icon = new LabelWidget(brandGlyph,
-                qq ? FontManager.qqMusicIcon68 : FontManager.musicBrand52);
+        final boolean kugou = platform == MusicPlatform.KUGOU;
+        final String brandGlyph = kugou ? MusicBrandIcons.KUGOU_MONOGRAM
+                : qq ? MusicBrandIcons.QQ_MUSIC : MusicBrandIcons.NETEASE_CLOUD_MUSIC;
+        final CFontRenderer brandFont = kugou ? FontManager.pf34bold
+                : qq ? FontManager.qqMusicIcon68 : FontManager.musicBrand52;
+        LabelWidget icon = new LabelWidget(brandGlyph, brandFont);
         dialog.addChild(icon);
         icon.setClickable(false);
         icon.setBeforeRenderCallback(() -> {
             icon.setColor(officialTextColor(platform));
-            centerIcon(icon, qq ? FontManager.qqMusicIcon68 : FontManager.musicBrand52, brandGlyph.charAt(0), y);
+            centerIcon(icon, brandFont, brandGlyph.charAt(0), y);
         });
 
         LabelWidget title = new LabelWidget(platform.getDisplayName(), FontManager.pf14bold);
@@ -305,8 +312,10 @@ public final class MusicSourceOverlay extends NCMPanel {
             title.setPosition(TEXT_LEFT, titleTop(y));
         });
 
-        LabelWidget subtitle = new LabelWidget(qq
-                ? "完整内容来源 · 搜索、歌单与 QQ 账号" : "完整内容来源 · 搜索、歌单与网易云账号", FontManager.pf12);
+        LabelWidget subtitle = new LabelWidget(kugou
+                ? "完整内容来源 · 搜索、歌单与酷狗账号"
+                : qq ? "完整内容来源 · 搜索、歌单与 QQ 账号"
+                : "完整内容来源 · 搜索、歌单与网易云账号", FontManager.pf12);
         dialog.addChild(subtitle);
         subtitle.setClickable(false);
         subtitle.setBeforeRenderCallback(() -> {

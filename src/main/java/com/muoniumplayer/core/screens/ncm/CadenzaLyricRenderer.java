@@ -40,7 +40,8 @@ import java.util.Random;
  * 脉冲会退回「当前字词自己的演唱进度」。两者取较大值，因此画面永远不会彻底不动。
  * 配色仍然用播放器主题强调色——项目没有封面调色板。</p>
  */
-final class CadenzaLyricRenderer implements SharedRenderingConstants, SharedConstants {
+final class CadenzaLyricRenderer implements FullscreenLyricRenderer,
+        SharedRenderingConstants, SharedConstants {
 
     /** 字词在唱到之前多久开始进场。 */
     private static final long ENTER_LEAD_MS = 260L;
@@ -267,7 +268,7 @@ final class CadenzaLyricRenderer implements SharedRenderingConstants, SharedCons
     private double beatSmooth;
 
     /** 换歌/换歌词时把状态清干净，否则上一首的字词会残留一帧。 */
-    void reset() {
+    public void reset() {
         tokens.clear();
         outgoing.clear();
         laidOutLine = null;
@@ -288,8 +289,8 @@ final class CadenzaLyricRenderer implements SharedRenderingConstants, SharedCons
      * @param currentLine 当前行，{@code null} 表示这一刻没有歌词
      * @param positionMs  本帧的播放毫秒，与经典样式共用同一份快照
      */
-    void render(double viewLeft, double viewTop, double viewWidth, double viewHeight,
-                float alpha, double positionMs, LyricLine currentLine) {
+    public void render(double viewLeft, double viewTop, double viewWidth, double viewHeight,
+                       float alpha, double positionMs, LyricLine currentLine) {
         if (viewWidth <= 4 || viewHeight <= 4 || alpha <= 0.004f) return;
 
         long now = System.nanoTime();

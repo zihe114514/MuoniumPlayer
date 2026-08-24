@@ -118,6 +118,19 @@ public class Music {
     private transient String gdPlatform;
     private transient String gdPicId;
     private transient String gdLyricId;
+    /**
+     * 酷狗的曲目主键。
+     *
+     * <p>酷狗不像网易云/QQ 那样有一个贯穿全站的歌曲 id：取流、取歌词都按<b>文件 hash</b> 定位，
+     * 而同一首歌的三个音质是三个不同的 hash。所以这三个都要留着，取流时按音质挑一个再逐档回退。</p>
+     */
+    private transient String kugouHash = "";
+    private transient String kugouHash320 = "";
+    private transient String kugouHashLossless = "";
+    private transient String kugouAlbumId = "";
+    private transient String kugouAlbumAudioId = "";
+    /** 带 {@code {size}} 占位符的酷狗封面模板。 */
+    private transient String kugouCoverTemplate = "";
     private transient boolean vip;
     /** True only when the NetEase payload explicitly marks this track as a cloud-drive track. */
     private transient boolean cloudSong;
@@ -304,6 +317,69 @@ public class Music {
         return music;
     }
 
+    /**
+     * 由酷狗曲目构造一首 {@link Music}。
+     *
+     * <p>酷狗没有全站歌曲 id，所以 {@code id} 用 hash 派生的稳定哈希 —— 它要稳定，因为封面缓存、
+     * 下载缓存、播放历史全都按 {@link #getStableKey()} 落盘，每次搜索换一个 id 会让缓存永远打不中。</p>
+     */
+    public static Music fromKuGouTrack(com.muoniumplayer.core.ncm.kugou.KuGouMusicApi.Track track) {
+        if (track == null) return null;
+        long stableId = stableLong("kugou:" + track.hash);
+
+        List<Artist> artistList = new ArrayList<>();
+        String artists = nonNull(track.artist);
+        if (!artists.trim().isEmpty()) {
+            for (String artistName : artists.split("\\s*[、,/]\\s*")) {
+                if (artistName.trim().isEmpty()) continue;
+                artistList.add(new Artist(stableLong("kugou:artist:" + artistName), artistName.trim(),
+                        Collections.emptyList(), Collections.emptyList()));
+            }
+        }
+        if (artistList.isEmpty()) {
+            artistList.add(new Artist(0L, "Unknown", Collections.emptyList(), Collections.emptyList()));
+        }
+
+        String albumName = nonNull(track.album);
+        String cover = com.muoniumplayer.core.ncm.kugou.KuGouMusicApi.cover(track.coverTemplate, 300);
+        Album album = new Album(stableLong("kugou:album:" + albumName), albumName, cover,
+                Collections.emptyList());
+
+        Music music = new Music(nonNull(track.name), nonNull(track.name), "", stableId,
+                artistList, Collections.emptyList(), album, track.durationMillis, 0L, 0L,
+                Collections.emptyList());
+        music.source = MusicPlatform.KUGOU;
+        music.sourceId = nonNull(track.hash);
+        music.sourceMid = nonNull(track.albumAudioId);
+        music.kugouHash = nonNull(track.hash);
+        music.kugouHash320 = nonNull(track.hash320);
+        music.kugouHashLossless = nonNull(track.hashLossless);
+        music.kugouAlbumId = nonNull(track.albumId);
+        music.kugouAlbumAudioId = nonNull(track.albumAudioId);
+        music.kugouCoverTemplate = nonNull(track.coverTemplate);
+        music.externalCoverUrl = cover;
+        music.vip = track.vip;
+        return music;
+    }
+
+    /** 还原成酷狗 API 的曲目模型，供取流与取歌词使用。 */
+    public com.muoniumplayer.core.ncm.kugou.KuGouMusicApi.Track toKuGouTrack() {
+        com.muoniumplayer.core.ncm.kugou.KuGouMusicApi.Track track =
+                new com.muoniumplayer.core.ncm.kugou.KuGouMusicApi.Track();
+        track.hash = nonNull(kugouHash).isEmpty() ? getSourceId() : kugouHash;
+        track.hash320 = nonNull(kugouHash320);
+        track.hashLossless = nonNull(kugouHashLossless);
+        track.albumId = nonNull(kugouAlbumId);
+        track.albumAudioId = nonNull(kugouAlbumAudioId);
+        track.name = nonNull(name);
+        track.artist = getArtistsName();
+        track.album = album == null ? "" : nonNull(album.getName());
+        track.durationMillis = getDuration();
+        track.coverTemplate = nonNull(kugouCoverTemplate);
+        track.vip = vip;
+        return track;
+    }
+
     /** Builds a freely selectable GD Studio track from a GD API search result. */
     public static Music fromGdTrack(GdStudioMusicService.GdTrack track, String platformKey) {
         if (track == null) return null;
@@ -383,6 +459,10 @@ public class Music {
         return getSource() == MusicPlatform.GD;
     }
 
+    public boolean isKuGou() {
+        return getSource() == MusicPlatform.KUGOU;
+    }
+
     /**
      * Returns whether the provider marks this track as membership or paid-content restricted.
      * Cadence supplies the flag for QQ tracks; NetEase fee is copied from its privilege payload.
@@ -448,6 +528,13 @@ public class Music {
     public String getCoverUrl(int size) {
         String base = getBaseCoverUrl();
         if (base.isEmpty()) return "";
+        if (isKuGou()) {
+            // 酷狗封面是带 {size} 占位符的模板，尺寸要替换进去而不是拼查询参数。
+            String template = kugouCoverTemplate == null || kugouCoverTemplate.trim().isEmpty()
+                    ? base : kugouCoverTemplate;
+            String resolved = com.muoniumplayer.core.ncm.kugou.KuGouMusicApi.cover(template, size);
+            return (resolved.isEmpty() ? base : resolved).replace("http://", "https://");
+        }
         if (isQQ() || isGd()) {
             // QQ/GD 封面 URL 已带平台尺寸，避免追加网易云专用 param 导致 404。
             return base.replace("http://", "https://");
@@ -492,6 +579,9 @@ public class Music {
         this.playbackQuality = PlaybackQuality.UNKNOWN;
         if (isGd()) {
             return resolveGdPlayUrl();
+        }
+        if (isKuGou()) {
+            return resolveKuGouPlayUrl();
         }
         if (isQQ()) {
             return resolveCadenceWithStandardFallback();
@@ -591,6 +681,28 @@ public class Music {
             }
         }, "post-download standard MP3 fallback");
     }
+    /**
+     * 酷狗取流。
+     *
+     * <p>音质降级由 {@code KuGouMusicApi.songUrl} 自己在三个 hash 之间做，所以这里只需要一次调用：
+     * 上游对每个音质是独立授权的，把降级放在能同时看到三个 hash 的那一层，比在这里重复三次请求更省。</p>
+     */
+    private Tuple<String, String> resolveKuGouPlayUrl() {
+        final Quality requestedQuality = CloudMusic.quality == null ? Quality.LOSSLESS : CloudMusic.quality;
+        return resolveWithTimeout(new Callable<Tuple<String, String>>() {
+            @Override
+            public Tuple<String, String> call() {
+                Tuple<String, String> resolved = normalizePlayUrl(
+                        com.muoniumplayer.core.ncm.music.KuGouMusicService.getSongUrl(Music.this, requestedQuality));
+                if (resolved != null) {
+                    playbackQuality = detectCadencePlaybackQuality(resolved.getB(), requestedQuality);
+                    considerHighestQuality(resolved.getB(), 0L);
+                }
+                return resolved;
+            }
+        }, "KuGou " + requestedQuality.getQuality());
+    }
+
     /** Tries the configured tier once, then a known-playable standard Cadence stream. */
     private Tuple<String, String> resolveCadenceWithStandardFallback() {
         final Quality requestedQuality = CloudMusic.quality == null ? Quality.LOSSLESS : CloudMusic.quality;

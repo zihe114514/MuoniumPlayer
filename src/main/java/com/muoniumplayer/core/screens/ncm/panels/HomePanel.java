@@ -8,6 +8,7 @@ import com.muoniumplayer.core.management.FontManager;
 import com.muoniumplayer.core.ncm.api.CloudMusicApi;
 import com.muoniumplayer.core.ncm.music.CadenceMusicService;
 import com.muoniumplayer.core.ncm.music.CloudMusic;
+import com.muoniumplayer.core.ncm.music.KuGouMusicService;
 import com.muoniumplayer.core.ncm.music.MusicPlatform;
 import com.muoniumplayer.core.ncm.music.dto.Music;
 import com.muoniumplayer.core.ncm.music.dto.PlayList;
@@ -73,6 +74,9 @@ public class HomePanel extends NCMPanel {
     private static final int QQ_HOME_TARGET = 240;
     private static volatile List<PlayList> qqHomePlaylists = Collections.emptyList();
     private static volatile boolean qqHomeLoading;
+    private static final int KUGOU_HOME_TARGET = 240;
+    private static volatile List<PlayList> kugouHomePlaylists = Collections.emptyList();
+    private static volatile boolean kugouHomeLoading;
 
     @Override
     public void onInit() {
@@ -83,9 +87,55 @@ public class HomePanel extends NCMPanel {
         }
         if (platform == MusicPlatform.QQ) {
             loadQQHome();
+        } else if (platform == MusicPlatform.KUGOU) {
+            loadKuGouHome();
         } else {
             loadNeteaseHome();
         }
+    }
+
+    /**
+     * 首页问候语。
+     *
+     * <p>抽成一处是因为占位布局与正式布局都要用它，而两处如果不一致，加载中和加载完的标题会跳一下。</p>
+     */
+    private static String welcomeTextFor(MusicPlatform platform) {
+        if (platform == MusicPlatform.QQ) return "欢迎使用 QQ 音乐!";
+        if (platform == MusicPlatform.KUGOU) return "欢迎使用 酷狗音乐!";
+        return "欢迎来到 MuoniumPlayer!";
+    }
+
+    /**
+     * 首页只有<b>标题 + 一枚转子</b>的过渡布局。
+     *
+     * <p>冷启动时推荐歌单缓存是空的，原来这段等待里 {@code getChildren()} 也是空的 ——
+     * 页面整片空白，看不出是在加载还是坏了。{@link #layout} 开头就 {@code getChildren().clear()}，
+     * 所以数据回来时这份占位会被自然覆盖，不需要额外清理。</p>
+     *
+     * @param spinning {@code false} 用于终态提示（获取失败），此时不该继续转
+     */
+    private void layoutPlaceholder(String message, boolean spinning) {
+        this.getChildren().clear();
+        this.scrollPanel = null;
+        final String welcomeText = welcomeTextFor(platform);
+        final int margin = 12;
+
+        LabelWidget lblWelcome = new LabelWidget(welcomeText, FontManager.pf25bold);
+        lblWelcome.setClickable(false);
+        lblWelcome.setBeforeRenderCallback(() -> lblWelcome
+                .setPosition(margin, margin)
+                .setMaxWidth(Math.max(1.0, this.getWidth() - margin * 2.0))
+                .setWidthLimitType(LabelWidget.WidthLimitType.TRIM_TO_WIDTH)
+                .setColor(NCMScreen.getColor(NCMScreen.ColorType.PRIMARY_TEXT)));
+        this.addChild(lblWelcome);
+
+        PanelLoadingWidget indicator = new PanelLoadingWidget(message);
+        indicator.setSpinning(spinning);
+        indicator.setClickable(false);
+        indicator.setBeforeRenderCallback(() -> indicator.setBounds(margin, 52.0,
+                Math.max(1.0, this.getWidth() - margin * 2.0),
+                Math.max(1.0, this.getHeight() - 52.0 - 30.0)));
+        this.addChild(indicator);
     }
 
     private void loadNeteaseHome() {
@@ -101,6 +151,11 @@ public class HomePanel extends NCMPanel {
         }
         if (neteaseHomeComplete) {
             return;
+        }
+        // 冷启动：缓存为空时先立起转子，否则这段网络等待期间首页是整片空白。
+        final boolean hadCache = !cached.isEmpty();
+        if (!hadCache) {
+            layoutPlaceholder("正在获取推荐歌单…", true);
         }
 
         MultiThreadingUtil.runAsync(() -> {
@@ -159,9 +214,16 @@ public class HomePanel extends NCMPanel {
 
             final List<PlayList> displayed = result;
             MultiThreadingUtil.runOnMainThread(() -> {
-                if (CadenceMusicService.getCurrentPlatform() == platform && !displayed.isEmpty()) {
+                if (CadenceMusicService.getCurrentPlatform() != platform) return;
+                if (!displayed.isEmpty()) {
                     layout(displayed, recommendationTitle(displayed.size()));
+                    return;
                 }
+                // 一件都没取到时必须给个终态：否则上面立起的转子会一直转下去，
+                // 那比"页面空白"更糟 —— 用户会一直等一个不会来的结果。
+                // 有缓存时页面上已经是真实内容，不能拿失败提示把它盖掉。
+                if (hadCache) return;
+                layoutPlaceholder("推荐歌单获取失败，请稍后重试", false);
             });
 
             System.out.println("[Music] Loaded " + result.size() + " Netease homepage playlists.");
@@ -226,8 +288,18 @@ public class HomePanel extends NCMPanel {
             return;
         }
 
+        // 无论这次是否真的发起请求，都要先给出"在忙"的反馈：另一个实例正在加载时直接 return，
+        // 原来会留下一个空白页面，看起来像点了没反应。
+        layoutPlaceholder("正在获取 QQ 音乐推荐…", true);
+
         synchronized (HomePanel.class) {
-            if (qqHomeLoading) return;
+            if (qqHomeLoading) {
+                // 已有一次加载在飞：不重复发请求，改为等它把缓存填好再自己布局。
+                // 原来是直接 return —— 现在上面立了转子，直接返回会让它永远转下去，
+                // 因为那次加载的完成回调作用在另一个 HomePanel 实例上。
+                MultiThreadingUtil.runAsync(this::awaitQQHomeCache);
+                return;
+            }
             qqHomeLoading = true;
         }
 
@@ -255,9 +327,19 @@ public class HomePanel extends NCMPanel {
                 qqHomePlaylists = Collections.unmodifiableList(new ArrayList<>(result));
                 final List<PlayList> displayed = new ArrayList<>(result);
                 MultiThreadingUtil.runOnMainThread(() -> {
-                    if (CadenceMusicService.getCurrentPlatform() == platform && !displayed.isEmpty()) {
+                    if (CadenceMusicService.getCurrentPlatform() != platform) return;
+                    if (!displayed.isEmpty()) {
                         layout(displayed, qqRecommendationTitle(displayed.size()));
+                    } else {
+                        layoutPlaceholder("QQ 音乐推荐获取失败，请稍后重试", false);
                     }
+                });
+            } catch (Throwable throwable) {
+                // 原来这里只有 finally：推荐与排行榜双双抛异常时转子会永远转下去。
+                System.err.println("[Music] QQ 首页加载失败: " + throwable);
+                MultiThreadingUtil.runOnMainThread(() -> {
+                    if (CadenceMusicService.getCurrentPlatform() == platform)
+                        layoutPlaceholder("QQ 音乐推荐获取失败，请稍后重试", false);
                 });
             } finally {
                 qqHomeLoading = false;
@@ -265,15 +347,113 @@ public class HomePanel extends NCMPanel {
         });
     }
 
+    /** 等另一次 QQ 首页加载填好缓存（最多 20 秒），然后用它布局本实例。超时按失败处理。 */
+    private void awaitQQHomeCache() {
+        final long deadline = System.nanoTime() + 20_000_000_000L;
+        while (qqHomeLoading && System.nanoTime() - deadline < 0L) {
+            try {
+                Thread.sleep(120L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        final List<PlayList> cached = new ArrayList<>(qqHomePlaylists);
+        MultiThreadingUtil.runOnMainThread(() -> {
+            if (CadenceMusicService.getCurrentPlatform() != platform) return;
+            if (cached.isEmpty()) {
+                layoutPlaceholder("QQ 音乐推荐获取失败，请稍后重试", false);
+            } else {
+                layout(cached, qqRecommendationTitle(cached.size()));
+            }
+        });
+    }
+
     private static String qqRecommendationTitle(int count) {
         return count > 1 ? "QQ 音乐 · 推荐歌单 · " + count : "QQ 音乐 · 巅峰榜";
+    }
+
+    /**
+     * 酷狗首页。结构照 {@link #loadQQHome()}：先用静态缓存立即出图，冷启动立转子，
+     * 已有另一次加载在飞时不重复发请求、改为等缓存（否则那次加载的回调作用在别的实例上，
+     * 本实例的转子会一直转）。
+     */
+    private void loadKuGouHome() {
+        List<PlayList> cached = new ArrayList<>(kugouHomePlaylists);
+        if (!cached.isEmpty()) {
+            layout(cached, kugouRecommendationTitle(cached.size()));
+            return;
+        }
+
+        layoutPlaceholder("正在获取酷狗推荐歌单…", true);
+
+        synchronized (HomePanel.class) {
+            if (kugouHomeLoading) {
+                MultiThreadingUtil.runAsync(this::awaitKuGouHomeCache);
+                return;
+            }
+            kugouHomeLoading = true;
+        }
+
+        MultiThreadingUtil.runAsync(() -> {
+            try {
+                List<PlayList> result = KuGouMusicService.recommendPlaylists(KUGOU_HOME_TARGET);
+                if (result.isEmpty()) {
+                    // 推荐接口临时不可用时回退到榜单，避免主页整页空白。
+                    result = KuGouMusicService.rankPlaylists();
+                }
+                kugouHomePlaylists = Collections.unmodifiableList(new ArrayList<>(result));
+                final List<PlayList> displayed = new ArrayList<>(result);
+                MultiThreadingUtil.runOnMainThread(() -> {
+                    if (CadenceMusicService.getCurrentPlatform() != platform) return;
+                    if (!displayed.isEmpty()) {
+                        layout(displayed, kugouRecommendationTitle(displayed.size()));
+                    } else {
+                        layoutPlaceholder("酷狗推荐获取失败，请稍后重试", false);
+                    }
+                });
+            } catch (Throwable throwable) {
+                System.err.println("[Music] 酷狗首页加载失败: " + throwable);
+                MultiThreadingUtil.runOnMainThread(() -> {
+                    if (CadenceMusicService.getCurrentPlatform() == platform)
+                        layoutPlaceholder("酷狗推荐获取失败，请稍后重试", false);
+                });
+            } finally {
+                kugouHomeLoading = false;
+            }
+        });
+    }
+
+    /** 等另一次酷狗首页加载填好缓存（最多 20 秒），然后用它布局本实例。超时按失败处理。 */
+    private void awaitKuGouHomeCache() {
+        final long deadline = System.nanoTime() + 20_000_000_000L;
+        while (kugouHomeLoading && System.nanoTime() - deadline < 0L) {
+            try {
+                Thread.sleep(120L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        final List<PlayList> cached = new ArrayList<>(kugouHomePlaylists);
+        MultiThreadingUtil.runOnMainThread(() -> {
+            if (CadenceMusicService.getCurrentPlatform() != platform) return;
+            if (cached.isEmpty()) {
+                layoutPlaceholder("酷狗推荐获取失败，请稍后重试", false);
+            } else {
+                layout(cached, kugouRecommendationTitle(cached.size()));
+            }
+        });
+    }
+
+    private static String kugouRecommendationTitle(int count) {
+        return count > 0 ? "酷狗音乐 · 推荐歌单 · " + count : "酷狗音乐 · 推荐歌单";
     }
     public ScrollPanel scrollPanel;
 
     private void layout(List<PlayList> displayedPlayLists, String recommendationsText) {
         this.getChildren().clear();
-        final String welcomeText = platform == MusicPlatform.QQ
-                ? "欢迎使用 QQ 音乐!" : "欢迎来到 MuoniumPlayer!";
+        final String welcomeText = welcomeTextFor(platform);
         final int margin = 12;
 
         // Font atlases report a negative height before their first draw. Keep a stable

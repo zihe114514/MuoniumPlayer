@@ -209,7 +209,9 @@ public class MusicLyricsWidget extends ExtensionModule implements SharedConstant
                         currentLine = CloudMusic.lyrics.get(i + 1);
                 }
 
-                if (CloudMusic.haveNoWords) {
+                if (CloudMusic.haveNoWords || currentLine.words.isEmpty()) {
+                    // words 为空时不能走逐字分支：calculateCurrentWordInfo 会返回下标 0，
+                    // 紧接着的 words.get(0) 直接 IndexOutOfBounds —— 而这是每帧执行的渲染路径。
                     System.setProperty("ncm.dynIslandLyrics", EnumChatColor.WHITE + currentLine.getLyric());
                 } else {
                     WordInfo wordInfo = calculateCurrentWordInfo(currentLine, songProgress);
@@ -271,7 +273,7 @@ public class MusicLyricsWidget extends ExtensionModule implements SharedConstant
 
         if (ClientSettings.DEBUG_MODE) {
             LyricLine currentLine = CloudMusic.currentLyric;
-            if (currentLine != null && !CloudMusic.haveNoWords) {
+            if (currentLine != null && !CloudMusic.haveNoWords && !currentLine.words.isEmpty()) {
                 WordInfo wordInfo = calculateCurrentWordInfo(currentLine, songProgress);
 
                 LyricLine.Word current = currentLine.words.get(wordInfo.currentIndex);
@@ -287,7 +289,10 @@ public class MusicLyricsWidget extends ExtensionModule implements SharedConstant
     }
 
     private boolean shouldRender() {
-        return CloudMusic.player != null && !CloudMusic.player.isFinished() && !CloudMusic.lyrics.isEmpty();
+        // lyricsMatchCurrentTrack()：切歌后歌词时间轴还属于上一首时整块不画，否则桌面歌词会用
+        // 新歌的进度去填涂旧歌的字。
+        return CloudMusic.player != null && !CloudMusic.player.isFinished()
+                && !CloudMusic.lyrics.isEmpty() && CloudMusic.lyricsMatchCurrentTrack();
     }
 
     private void handleSingleLineMode(boolean shouldNotDisplayOtherLyrics) {

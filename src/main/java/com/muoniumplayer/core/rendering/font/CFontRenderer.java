@@ -524,6 +524,15 @@ public class CFontRenderer implements Closeable, SharedConstants {
         return Mth.floor(getStringWidthD(text));
     }
 
+    /**
+     * 字宽记忆表。
+     *
+     * <p>上限是必须的：键是任意文本，而调用方里有「歌词逐字前缀」这类会随歌曲不断产生新串的用法，
+     * 一局游戏放上百首歌就会稳定地往里堆几万条，且永远不会被回收。超过上限时整表清掉而不是做 LRU：
+     * 这件事罕见到不值得为它维护访问顺序，清掉之后当前这一屏的文本会在同一帧内重新量测填回来。</p>
+     */
+    private static final int STRING_WIDTH_CACHE_LIMIT = 20_000;
+
     private final Map<String, Double> stringWidthMapD = new HashMap<>();
 
     public boolean areGlyphsLoaded(String text) {
@@ -595,6 +604,9 @@ public class CFontRenderer implements Closeable, SharedConstants {
         }
 
         if (!shouldntAdd) {
+            if (this.stringWidthMapD.size() >= STRING_WIDTH_CACHE_LIMIT) {
+                this.stringWidthMapD.clear();
+            }
             this.stringWidthMapD.put(text, Math.max(currentLine, maxPreviousLines));
         }
 

@@ -131,6 +131,20 @@ public class CloudMusic implements SharedConstants {
      * they are, otherwise it silently applies one song's structure to another.</p>
      */
     public static volatile String lyricsTrackKey = null;
+
+    /**
+     * 当前提交的歌词时间轴是否真的属于正在出声的那首歌。
+     *
+     * <p>切歌（普通切换与 automix 无缝交接都一样）会先把 {@link #currentlyPlaying} 和 {@link #player}
+     * 换成新歌，而歌词要等一次网络请求才回来。这中间的几百毫秒到数秒里，{@link #lyrics} 还是<b>上一首</b>
+     * 的时间轴，却已经在被<b>新歌</b>的音频时钟驱动 —— 表现就是切歌瞬间歌词跳到一个毫不相干的位置、
+     * 或者旧歌词继续按新歌进度滚。所有以时间轴下结论的地方都必须先过这一关。</p>
+     */
+    public static boolean lyricsMatchCurrentTrack() {
+        Music current = currentlyPlaying;
+        String owner = lyricsTrackKey;
+        return current != null && owner != null && owner.equals(current.getStableKey());
+    }
     public static boolean hasTransLyrics = false;
     public static boolean hasRomanization = false;
     public static boolean haveNoWords = false;
@@ -1305,7 +1319,11 @@ public class CloudMusic implements SharedConstants {
 
                 AudioPlayer activePlayer = ownedPlayer;
                 if (activePlayer == null) break;
-                CloudMusic.updateCurrentLyric(activePlayer.getCurrentTimeMillis());
+                // 归属校验后再推进歌词：切歌后新解码器已经在出声，而歌词还是上一首的时间轴，
+                // 用新时钟去查旧时间轴查出来的行必然是错的（这就是"切歌歌词不同步"的根因）。
+                if (CloudMusic.lyricsMatchCurrentTrack()) {
+                    CloudMusic.updateCurrentLyric(activePlayer.getCurrentTimeMillis());
+                }
                 NeteasePlaybackHistoryReporter.observe(activePlayer);
 
                 // The 10 ms supervision tick doubles as the crossfade clock: fine-grained enough for a
@@ -2726,8 +2744,15 @@ public class CloudMusic implements SharedConstants {
         MultiThreadingUtil.runAsync(() -> {
             User currentProfile = profile;
             long profileId = currentProfile == null ? 0L : currentProfile.getId();
-            LyricLoadService.LyricLoadResult result = LyricLoadService.load(
-                    music, songId, profileId, embeddedLyricFile);
+            LyricLoadService.LyricLoadResult result;
+            try {
+                result = LyricLoadService.load(music, songId, profileId, embeddedLyricFile);
+            } catch (Throwable failure) {
+                // 必须提交一个结果，哪怕是空的：lyricsMatchCurrentTrack() 用 lyricsTrackKey 判断归属，
+                // 这里直接 return 会让归属键永远停在上一首，于是这首歌的歌词区永久空白。
+                System.err.println("[Music] lyric load failed for " + trackKey + ": " + failure);
+                result = LyricLoadService.LyricLoadResult.empty();
+            }
 
             Music current = currentlyPlaying;
             if (!session.isActive() || current == null || !trackKey.equals(current.getStableKey())
@@ -2816,11 +2841,12 @@ public class CloudMusic implements SharedConstants {
     public static List<Music> search(String keyWord) {
         List<Music> cadenceResults = CadenceMusicService.search(keyWord, 50);
         MusicPlatform platform = CadenceMusicService.getCurrentPlatform();
-        if (!cadenceResults.isEmpty() || platform == MusicPlatform.QQ || platform == MusicPlatform.GD) {
+        // 只有网易云才有"原 API 兜底"这条退路。这里按"不是网易云就直接返回"来判定，而不是把非网易云的
+        // 平台一个个列出来 —— 漏掉一个（酷狗就差点漏掉）就会让该平台的空搜索结果偷偷落到网易云搜索上。
+        if (!cadenceResults.isEmpty() || platform != MusicPlatform.NETEASE) {
             return cadenceResults;
         }
 
-        // Cadence 网络失败时仅对网易云保留原 API 兜底，QQ 不可误发到网易云搜索。
         return NeteaseAccountRepository.searchSongs(keyWord);
     }
 

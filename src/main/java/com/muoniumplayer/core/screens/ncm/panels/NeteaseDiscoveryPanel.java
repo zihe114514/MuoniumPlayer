@@ -69,6 +69,11 @@ public final class NeteaseDiscoveryPanel extends NCMPanel {
 
     @Override
     public void onInit() {
+        // 顺序很关键：先把 loading 立起来再建布局。原来是先 renderLayout()（此时 loading 还是 false）
+        // 再 loadPage()（在那里才置 true，但不会重建布局），于是列表区第一帧就是空的 ——
+        // 表现就是"最近播放没有加载动画"，只有副标题那一行小字在动。
+        loading = true;
+        status = "正在获取…";
         renderLayout();
         loadPage();
     }
@@ -104,12 +109,13 @@ public final class NeteaseDiscoveryPanel extends NCMPanel {
                 Math.max(1.0, getWidth() - margin * 2.0), Math.max(1.0, getHeight() - 74)));
 
         if (loading && entries.isEmpty()) {
-            LabelWidget loadingText = new LabelWidget("正在获取…", FontManager.pf14bold);
-            list.addChild(loadingText);
-            loadingText.setClickable(false);
-            loadingText.setBeforeRenderCallback(() -> loadingText
-                    .setColor(NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT))
-                    .setBounds(Math.max(1.0, list.getWidth()), 22));
+            // 和歌单页、主页用同一枚转子。原来这里只有一行不会动的"正在获取…"，
+            // 看起来像页面卡住了而不是在等网络。
+            PanelLoadingWidget spinner = new PanelLoadingWidget("正在获取" + pageTitle() + "…");
+            addChild(spinner);
+            spinner.setClickable(false);
+            spinner.setBeforeRenderCallback(() -> spinner.setBounds(list.getRelativeX(), list.getRelativeY(),
+                    Math.max(1.0, list.getWidth()), Math.max(1.0, list.getHeight())));
             return;
         }
 
@@ -160,44 +166,45 @@ public final class NeteaseDiscoveryPanel extends NCMPanel {
                     loadQQPage();
                     return;
                 }
+                // 这三页是"中转"：取完数据就把用户送到别处，自己不显示内容。导航栏现在走
+                // NCMScreen#navigateAsync 直达，正常不会再进到这里；仍然保留是因为它们还能被
+                // 历史记录、外部调用重新实例化。切页用 replaceCurrentPanel —— 用 setCurrentPanel
+                // 会把这个中转页留在历史里，按返回退回来它又会重新加载再把人送走。
                 if (page == Page.TOP_LISTS) {
-                    CardPage cards = topListCards();
+                    NCMPanel target = loadTopListsPanel();
                     MultiThreadingUtil.runOnMainThread(() -> {
                         loading = false;
-                        if (cards.items.isEmpty()) {
+                        if (target == null) {
                             status = "排行榜暂无内容";
                             renderLayout();
                         } else {
-                            NCMScreen.getInstance().setCurrentPanel(new HomePanel(cards.items,
-                                    "排行榜 · " + cards.items.size()));
+                            NCMScreen.getInstance().replaceCurrentPanel(target);
                         }
                     });
                     return;
                 }
                 if (page == Page.DIGITAL_ALBUMS) {
-                    CardPage cards = digitalAlbumCards();
+                    NCMPanel target = loadDigitalAlbumsPanel();
                     MultiThreadingUtil.runOnMainThread(() -> {
                         loading = false;
-                        if (cards.items.isEmpty()) {
+                        if (target == null) {
                             status = "暂无已购买数字专辑或登录状态已失效";
                             renderLayout();
                         } else {
-                            NCMScreen.getInstance().setCurrentPanel(new HomePanel(cards.items,
-                                    "我的数字专辑 · " + cards.items.size(), cards.actions));
+                            NCMScreen.getInstance().replaceCurrentPanel(target);
                         }
                     });
                     return;
                 }
                 if (page == Page.RECENT_SONGS) {
-                    JsonObject root = CloudMusicApi.recentSongs(100).toJsonObject();
-                    List<Music> songs = parseSongsFromRecentResponse(root);
+                    NCMPanel target = loadRecentSongsPanel();
                     MultiThreadingUtil.runOnMainThread(() -> {
                         loading = false;
-                        if (songs.isEmpty()) {
+                        if (target == null) {
                             status = "暂无最近播放记录或登录状态已失效";
                             renderLayout();
                         } else {
-                            openSongs(page.title, songs, false);
+                            NCMScreen.getInstance().replaceCurrentPanel(target);
                         }
                     });
                     return;
@@ -218,6 +225,21 @@ public final class NeteaseDiscoveryPanel extends NCMPanel {
     }
 
     private void loadQQPage() {
+        if (page == Page.HOT_SEARCH) {
+            List<String> keywords = com.muoniumplayer.core.ncm.qq.QQDiscoveryApi.hotSearches(50);
+            List<Entry> hot = new ArrayList<>();
+            int rank = 1;
+            for (String keyword : keywords) {
+                final String selected = keyword;
+                hot.add(new Entry(rank++ + ". " + keyword, "点击搜索",
+                        () -> openLegacySongSearch(selected)));
+            }
+            entries = hot;
+            status = hot.isEmpty() ? "QQ 音乐热搜暂无内容" : "共 " + hot.size() + " 项";
+            loading = false;
+            MultiThreadingUtil.runOnMainThread(this::renderLayout);
+            return;
+        }
         if (page != Page.TOP_LISTS) {
             entries = Collections.emptyList();
             status = "该 QQ 功能暂未由当前数据源提供";
@@ -226,6 +248,8 @@ public final class NeteaseDiscoveryPanel extends NCMPanel {
             return;
         }
 
+        // 走到这里说明是被历史记录/外部调用重新实例化的旧入口：导航栏现在直达卡片墙
+        // （loadQQTopListsPanel），这条按歌曲行展示的兜底保留着，取的是默认热歌榜。
         final List<Music> tracks = CadenceMusicService.getQQTopTracks(100);
         List<Entry> loaded = new ArrayList<>();
         for (int index = 0; index < tracks.size(); index++) {
@@ -246,11 +270,13 @@ public final class NeteaseDiscoveryPanel extends NCMPanel {
 
     private String pageTitle() {
         if (platform == MusicPlatform.QQ && page == Page.TOP_LISTS) return "QQ 音乐排行榜";
+        if (platform == MusicPlatform.QQ && page == Page.HOT_SEARCH) return "QQ 音乐热搜";
         return page.title;
     }
 
     private String pageSubtitle() {
         if (platform == MusicPlatform.QQ && page == Page.TOP_LISTS) return "QQ 音乐巅峰榜 · 复用播放器现有列表与播放样式";
+        if (platform == MusicPlatform.QQ && page == Page.HOT_SEARCH) return "QQ 音乐实时热搜 · 点击直接搜索";
         return page.subtitle;
     }
 
@@ -293,7 +319,7 @@ public final class NeteaseDiscoveryPanel extends NCMPanel {
         });
     }
 
-    private CardPage digitalAlbumCards() {
+    private static CardPage digitalAlbumCards() {
         JsonObject root = CloudMusicApi.digitalAlbumPurchased(100, 0).toJsonObject();
         JsonArray data = nestedArray(root, "paidAlbums", "albums", "data");
         List<PlayList> cards = new ArrayList<>();
@@ -318,7 +344,7 @@ public final class NeteaseDiscoveryPanel extends NCMPanel {
         return new CardPage(cards, actions);
     }
 
-    private CardPage topListCards() {
+    private static CardPage topListCards() {
         JsonObject root = CloudMusicApi.topListDetail().toJsonObject();
         JsonArray data = nestedArray(root, "list", "data");
         if (data == null) data = nestedArray(CloudMusicApi.topListDetailV2().toJsonObject(), "list", "data");
@@ -373,15 +399,73 @@ public final class NeteaseDiscoveryPanel extends NCMPanel {
     }
 
     private static void openSongs(String title, List<Music> songs, boolean showBackButton) {
+        // setCurrentPanel() invokes onInit() exactly once. Calling it again here
+        // duplicated every row and made the recent-play page render overlapping text.
+        NCMScreen.getInstance().setCurrentPanel(buildSongsPanel(songs, showBackButton));
+    }
+
+    /**
+     * 只<b>构造</b>歌曲列表页而不切页。可以在工作线程调用（不碰 GL，{@code onInit} 由
+     * {@code setCurrentPanel} 在主线程触发），所以导航栏那条"先取数据再一次切页"的路径能复用它。
+     */
+    private static PlaylistPanel buildSongsPanel(List<Music> songs, boolean showBackButton) {
         CloudMusic.currentPlaylistContext = null;
         PlayList playlist = JsonUtils.parse("{}", PlayList.class);
         playlist.setSearchMode(true);
         playlist.setMusics(new CopyOnWriteArrayList<>(songs == null ? Collections.<Music>emptyList() : songs));
         playlist.setMusicsQueried(true);
         playlist.setMusicsLoaded(true);
-        // setCurrentPanel() invokes onInit() exactly once. Calling it again here
-        // duplicated every row and made the recent-play page render overlapping text.
-        NCMScreen.getInstance().setCurrentPanel(new PlaylistPanel(playlist, showBackButton));
+        return new PlaylistPanel(playlist, showBackButton);
+    }
+
+    /**
+     * 以下三个工厂给 {@code NCMScreen#navigateAsync} 用：<b>在工作线程</b>取数据并直接返回目标页面，
+     * 返回 {@code null} 表示没有内容可展示（调用方留在当前页面并给一条提示）。
+     *
+     * <p>它们存在的理由是这三个入口本来就不是"页面"，只是"取完数据去哪"的决策 ——
+     * 原来靠一个空的中转面板承载这段等待，代价是两次页面切换加一条回不去的历史。</p>
+     */
+    public static NCMPanel loadTopListsPanel() {
+        CardPage cards = topListCards();
+        if (cards.items.isEmpty()) return null;
+        return new HomePanel(cards.items, "排行榜 · " + cards.items.size());
+    }
+
+    /**
+     * QQ 音乐榜单卡片墙。
+     *
+     * <p>原来 QQ 的"排行榜"只写死两个榜（26 / 4）并按歌曲行展示；这里改成把 QQ 自己那份榜单目录
+     * （{@code fcg_myqq_toplist}，实测 25 个榜）铺成卡片，和网易云榜单页保持同一种形态。</p>
+     *
+     * <p>卡片不预取曲目：{@code platformPlaylistId} 写成 {@code toplist:<id>}，点进去由
+     * {@code PlayList#queryMusics} 走 QQ 那条既有的懒加载路径，所以这一页只发一个请求。</p>
+     */
+    public static NCMPanel loadQQTopListsPanel() {
+        List<com.muoniumplayer.core.ncm.qq.QQDiscoveryApi.TopList> lists =
+                com.muoniumplayer.core.ncm.qq.QQDiscoveryApi.topLists();
+        if (lists.isEmpty()) return null;
+        List<PlayList> cards = new ArrayList<>();
+        for (com.muoniumplayer.core.ncm.qq.QQDiscoveryApi.TopList list : lists) {
+            PlayList card = new PlayList(-3_000_000L - list.id, list.title, list.coverUrl, 0, 0L,
+                    null, "QQ 音乐榜单", 0L);
+            card.setPlatform(MusicPlatform.QQ);
+            card.setPlatformPlaylistId("toplist:" + list.id);
+            cards.add(card);
+        }
+        return new HomePanel(cards, "QQ 音乐榜单 · " + cards.size());
+    }
+
+    public static NCMPanel loadDigitalAlbumsPanel() {
+        CardPage cards = digitalAlbumCards();
+        if (cards.items.isEmpty()) return null;
+        return new HomePanel(cards.items, "我的数字专辑 · " + cards.items.size(), cards.actions);
+    }
+
+    public static NCMPanel loadRecentSongsPanel() {
+        JsonObject root = CloudMusicApi.recentSongs(100).toJsonObject();
+        List<Music> songs = parseSongsFromRecentResponse(root);
+        if (songs.isEmpty()) return null;
+        return buildSongsPanel(songs, false);
     }
 
 

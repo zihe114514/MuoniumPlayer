@@ -56,6 +56,13 @@ final class LyricLoadService {
             System.out.println("[Music/QQ-QRC] Loaded word-by-word QRC lyrics for " + trackKey);
             return new LyricLoadResult(rawJson, qqQrcLyrics);
         }
+        // 逐字第三顺位:酷狗 KRC。它只对酷狗曲目生效(方法内部自检),同样只在"真的是逐字"时短路。
+        List<LyricLine> kugouLyrics = KuGouMusicService.getWordByWordLyrics(music);
+        if (LyricParser.hasWordByWordTiming(kugouLyrics)) {
+            System.out.println("[Music/KuGou] Loaded word-by-word KRC lyrics for " + trackKey);
+            return new LyricLoadResult(rawJson, kugouLyrics);
+        }
+
         if (music.isCloudSong() && profileId > 0L) {
             try {
                 JsonObject cloudJson = normalizeCloudLyricResponse(
@@ -101,6 +108,25 @@ final class LyricLoadService {
                 }
             } catch (Throwable throwable) {
                 System.err.println("[Music/Cadence] Unified lyric conversion failed for " + trackKey + ": "
+                        + throwable.getMessage());
+            }
+        }
+
+        // 酷狗的普通歌词兜底:上面那条统一 provider 链路对酷狗返回 null,行级 LRC 只能从这里补。
+        if (parsed.isEmpty() && music.isKuGou()) {
+            try {
+                String lrc = KuGouMusicService.getFallbackLrc(music);
+                if (!lrc.isEmpty()) {
+                    JsonObject lrcJson = createEmbeddedLyricJson(lrc);
+                    List<LyricLine> lines = LyricParser.parse(lrcJson);
+                    if (!lines.isEmpty()) {
+                        rawJson = lrcJson;
+                        parsed = lines;
+                        System.out.println("[Music/KuGou] Loaded line-level LRC lyrics for " + trackKey);
+                    }
+                }
+            } catch (Throwable throwable) {
+                System.err.println("[Music/KuGou] LRC fallback failed for " + trackKey + ": "
                         + throwable.getMessage());
             }
         }
@@ -204,6 +230,11 @@ final class LyricLoadService {
         private LyricLoadResult(JsonObject rawJson, List<LyricLine> lines) {
             this.rawJson = rawJson;
             this.lines = lines;
+        }
+
+        /** 加载彻底失败时的空结果：调用方仍然要提交一次，好让歌词时间轴的归属推进到当前歌曲。 */
+        static LyricLoadResult empty() {
+            return new LyricLoadResult(new JsonObject(), Collections.<LyricLine>emptyList());
         }
     }
 }

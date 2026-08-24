@@ -21,6 +21,7 @@ import com.muoniumplayer.core.ncm.music.dto.Music;
 import com.muoniumplayer.core.ncm.music.dto.PlayList;
 import com.muoniumplayer.core.rendering.DownloadDynamicIsland;
 import com.muoniumplayer.core.settings.ConfigPaths;
+import com.muoniumplayer.core.utils.Location;
 import com.muoniumplayer.core.utils.Tuple;
 
 import java.nio.charset.StandardCharsets;
@@ -108,6 +109,9 @@ public final class CadenceMusicService {
         if (currentPlatform == MusicPlatform.GD) {
             return searchGd(keyword, limit);
         }
+        if (currentPlatform == MusicPlatform.KUGOU) {
+            return KuGouMusicService.search(keyword, limit);
+        }
         try {
             List<Track> tracks = SERVICE.search(currentPlatform.toCadenceSource(), keyword.trim(), Math.max(1, limit));
             return adaptTracks(tracks);
@@ -148,6 +152,8 @@ public final class CadenceMusicService {
      */
     public static List<Music> search(MusicPlatform platform, String keyword, int limit) {
         if (isBlank(keyword) || platform == null) return Collections.emptyList();
+        if (platform == MusicPlatform.KUGOU) return KuGouMusicService.search(keyword, limit);
+        if (!platform.isCadenceBacked()) return Collections.emptyList();
         initialize(OptionsUtil.getCookie());
         try {
             return adaptTracks(SERVICE.search(platform.toCadenceSource(), keyword.trim(), Math.max(1, limit)));
@@ -182,9 +188,40 @@ public final class CadenceMusicService {
         }
     }
 
-    /** 按 QQ 原始 dissid/tid 读取歌单曲目。 */
+    /**
+     * 指定 QQ 榜单的曲目。
+     *
+     * <p>{@link #getQQTopTracks(int)} 是"随便给我一个热歌榜"，这条是"给我这个 topId 的榜"，
+     * 榜单卡片墙需要后者。</p>
+     */
+    public static List<Music> getQQTopTracks(int topId, int limit) {
+        initialize(OptionsUtil.getCookie());
+        try {
+            return adaptTracks(SERVICE.getQq().getToplist(topId, Math.max(1, limit)));
+        } catch (Throwable throwable) {
+            System.err.println("[Music/Cadence] QQ toplist " + topId + " failed: " + throwable.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * 按 QQ 原始 dissid/tid 读取歌单曲目。
+     *
+     * <p>{@code toplist:<id>} 是本项目自己约定的前缀，用来让榜单卡片走和歌单完全相同的懒加载路径
+     * （{@code PlayList#queryMusics}），不必为榜单再写一套取曲目的分支。</p>
+     */
     public static List<Music> getQQPlaylistTracks(String playlistId, int limit) {
         if (isBlank(playlistId)) return Collections.emptyList();
+        String trimmed = playlistId.trim();
+        if (trimmed.startsWith("toplist:")) {
+            try {
+                return getQQTopTracks(Integer.parseInt(trimmed.substring("toplist:".length()).trim()),
+                        Math.max(1, limit));
+            } catch (NumberFormatException malformed) {
+                System.err.println("[Music/Cadence] 非法的 QQ 榜单标识 " + trimmed);
+                return Collections.emptyList();
+            }
+        }
         initialize(OptionsUtil.getCookie());
         try {
             return adaptTracks(SERVICE.getQq().getPlaylistTracks(playlistId.trim(), Math.max(1, limit)));
@@ -225,6 +262,9 @@ public final class CadenceMusicService {
     /** Resolves one Cadence stream attempt at an explicit tier without mutating global preferences. */
     public static Tuple<String, String> getSongUrl(Music music, Quality requestedQuality) {
         if (music == null) return null;
+        if (music.isKuGou()) {
+            return KuGouMusicService.getSongUrl(music, requestedQuality);
+        }
         if (music.isGd()) {
             try {
                 Quality effectiveQuality = requestedQuality == null ? Quality.LOSSLESS : requestedQuality;
@@ -255,6 +295,11 @@ public final class CadenceMusicService {
 
     public static Lyric getLyric(Music music) {
         if (music == null) return null;
+        if (music.isKuGou()) {
+            // 酷狗的歌词走 KRC（逐字），在 LyricLoadService 里比这条统一兜底链路更早被问。
+            // 这里返回 null 而不是硬凑一个空 Lyric：null 才会让调用方继续往下走兜底。
+            return null;
+        }
         if (music.isGd()) {
             try {
                 com.muoniumplayer.core.utils.Tuple<String, String> lrc =
@@ -281,8 +326,73 @@ public final class CadenceMusicService {
     }
 
     public static QrCode createQrCode(MusicPlatform platform) {
+        if (platform == MusicPlatform.KUGOU) {
+            String key = KuGouMusicService.createQrKey();
+            if (isBlank(key)) throw new IllegalStateException("酷狗未返回扫码 key");
+            return new QrCode(key, KuGouMusicService.qrContent(key));
+        }
         initialize(OptionsUtil.getCookie());
         return SERVICE.createQrCode(platform.toCadenceSource());
+    }
+
+    /**
+     * QQ 音乐的<b>微信</b>扫码登录：申请二维码。
+     *
+     * <p>单独一条方法而不是给 {@link #createQrCode(MusicPlatform)} 加参数，是因为它与 QQ 扫码
+     * 完全不共用步骤（微信开放平台的网页 OAuth vs QQ 的 ptlogin），混在一个方法里很容易在某个分支
+     * 上误用另一条链路的会话 —— 那正是账号面板里"微信选项不能误触发 QQ 扫码"的约束。</p>
+     *
+     * <p>{@code qrContent} 返回的是 {@code data:image/...;base64,...}：微信只给图片、不给可重新
+     * 编码的二维码文本，而账号面板的 QQ 分支本来就认识 data URL，正好复用同一条渲染路径。</p>
+     */
+    public static QrCode createQqWechatQrCode() {
+        com.muoniumplayer.core.ncm.qq.QQWechatLogin.Session session =
+                com.muoniumplayer.core.ncm.qq.QQWechatLogin.create();
+        return new QrCode(session.uuid, session.imageDataUrl);
+    }
+
+    /**
+     * QQ 微信扫码的一次状态检查。确认后立刻把凭证写入 Cadence 的 QQ 会话并落盘。
+     *
+     * <p>写入用的是 {@code str_musicid} 优先的那个 id（由 {@code QQWechatLogin} 解析），
+     * 微信凭证的 {@code musicid} 字段里是占位值。</p>
+     */
+    public static QrLoginState checkQqWechatQrCode(QrCode qrCode) {
+        if (qrCode == null) return QrLoginState.ERROR;
+        initializeIfNeeded();
+        com.muoniumplayer.core.ncm.qq.QQWechatLogin.Poll poll =
+                com.muoniumplayer.core.ncm.qq.QQWechatLogin.poll(qrCode.getKey());
+        switch (poll.status) {
+            case com.muoniumplayer.core.ncm.qq.QQWechatLogin.STATUS_WAITING:
+                return QrLoginState.WAITING;
+            case com.muoniumplayer.core.ncm.qq.QQWechatLogin.STATUS_SCANNED:
+                return QrLoginState.SCANNED;
+            case com.muoniumplayer.core.ncm.qq.QQWechatLogin.STATUS_EXPIRED:
+                return QrLoginState.EXPIRED;
+            case com.muoniumplayer.core.ncm.qq.QQWechatLogin.STATUS_REFUSED:
+                // 用户在手机上点了取消：这是一个明确的终态，按过期处理让面板提示重新获取。
+                return QrLoginState.EXPIRED;
+            case com.muoniumplayer.core.ncm.qq.QQWechatLogin.STATUS_CONFIRMED:
+                break;
+            default:
+                System.err.println("[Music/QQ-WeChat] 未识别的上游状态码 " + poll.status);
+                return QrLoginState.ERROR;
+        }
+
+        try {
+            com.muoniumplayer.core.ncm.qq.QQWechatLogin.Credential credential =
+                    com.muoniumplayer.core.ncm.qq.QQWechatLogin.exchange(poll.code);
+            synchronized (CadenceMusicService.class) {
+                SERVICE.getQq().setMusicid(credential.musicId);
+                SERVICE.getQq().setMusicKey(credential.musicKey);
+                CREDENTIALS.setQq(credential.musicId, credential.musicKey);
+            }
+            refreshQQUserInfo();
+            return QrLoginState.CONFIRMED;
+        } catch (Throwable throwable) {
+            System.err.println("[Music/QQ-WeChat] 凭证兑换失败: " + throwable.getMessage());
+            return QrLoginState.ERROR;
+        }
     }
 
     public static QrLoginState checkQrCode(MusicPlatform platform, QrCode qrCode) {
@@ -303,6 +413,22 @@ public final class CadenceMusicService {
         if (platform == null || qrCode == null) {
             return QrLoginState.ERROR;
         }
+        if (platform == MusicPlatform.KUGOU) {
+            // 酷狗不经 Cadence：上游给的是原始码，这里翻成宿主的状态机。
+            switch (KuGouMusicService.checkQr(qrCode.getKey())) {
+                case 4:
+                    KuGouMusicService.ensureUserPlaylistsAsync(null);
+                    return QrLoginState.CONFIRMED;
+                case 2:
+                    return QrLoginState.SCANNED;
+                case 1:
+                    return QrLoginState.WAITING;
+                case 0:
+                    return QrLoginState.EXPIRED;
+                default:
+                    return QrLoginState.ERROR;
+            }
+        }
         initializeIfNeeded();
         QrLoginState state = SERVICE.checkQrCode(platform.toCadenceSource(), qrCode);
         if (state == QrLoginState.CONFIRMED) {
@@ -312,6 +438,10 @@ public final class CadenceMusicService {
     }
 
     public static synchronized void persistLogin(MusicPlatform platform) {
+        if (platform == MusicPlatform.KUGOU) {
+            // 酷狗的 token 在扫码成功那一刻已由 KuGouDevice 落盘，这里无需二次写入。
+            return;
+        }
         if (platform == MusicPlatform.QQ) {
             CREDENTIALS.setQq(SERVICE.getQq().getMusicid(), SERVICE.getQq().getMusicKey());
             refreshQQUserInfo();
@@ -323,6 +453,12 @@ public final class CadenceMusicService {
     }
 
     public static synchronized void logout(MusicPlatform platform) {
+        if (platform == MusicPlatform.KUGOU) {
+            // 必须挡在 initialize 之前返回：下面的 else 分支会清网易云 cookie，
+            // 酷狗掉进去就会把网易云一起注销。
+            KuGouMusicService.logout();
+            return;
+        }
         initialize(OptionsUtil.getCookie());
         if (platform == MusicPlatform.QQ) {
             SERVICE.getQq().clearLogin();
@@ -343,6 +479,7 @@ public final class CadenceMusicService {
     }
 
     public static boolean isLoggedIn(MusicPlatform platform) {
+        if (platform == MusicPlatform.KUGOU) return KuGouMusicService.isLoggedIn();
         initializeIfNeeded();
         if (platform == MusicPlatform.QQ) {
             return SERVICE.getQq().getLoggedIn();
@@ -351,6 +488,7 @@ public final class CadenceMusicService {
     }
 
     public static String getAccountName(MusicPlatform platform) {
+        if (platform == MusicPlatform.KUGOU) return KuGouMusicService.getAccountName();
         if (platform == MusicPlatform.QQ) {
             QQUserInfo info = qqUserInfo;
             if (info != null && !isBlank(info.getNickname())) return info.getNickname();
@@ -362,6 +500,48 @@ public final class CadenceMusicService {
     public static String getQQAvatarUrl() {
         QQUserInfo info = qqUserInfo;
         return info == null ? "" : nonNull(info.getAvatarUrl());
+    }
+
+    /** 网易云头像的取图参数。原来写死 32y32，全屏歌词里的头像比那大得多，32 px 放大后是一团糊。 */
+    private static final String NETEASE_AVATAR_PARAM = "?param=128y128";
+
+    /**
+     * 当前登录账号头像的远端地址；未登录或账号没有头像时返回空串。
+     *
+     * <p>提到这里是因为需要它的地方不止一处（侧边栏的账号行、群唱样式的右侧头像），
+     * 而两处必须请出<b>同一个</b>地址：贴图位置是按账号定的，两处若请求不同尺寸就会互相覆盖。</p>
+     */
+    public static String getAccountAvatarUrl(MusicPlatform platform) {
+        if (platform == MusicPlatform.KUGOU) return KuGouMusicService.getAvatarUrl();
+        if (platform == MusicPlatform.QQ) return getQQAvatarUrl();
+        if (CloudMusic.profile == null) return "";
+        String url = nonNull(CloudMusic.profile.getAvatarUrl());
+        return url.isEmpty() ? "" : url + NETEASE_AVATAR_PARAM;
+    }
+
+    /** 同 {@link #getAccountAvatarUrl(MusicPlatform)}，取当前平台。 */
+    public static String getAccountAvatarUrl() {
+        return getAccountAvatarUrl(getCurrentPlatform());
+    }
+
+    /**
+     * 当前登录账号头像的贴图位置；没有头像可下时返回 {@code null}。
+     *
+     * <p>返回非 {@code null} 只表示「这个账号有头像、该往这个位置放」，<b>不表示贴图已经就绪</b>。
+     * 就绪判断交给 {@link com.muoniumplayer.core.rendering.texture.AccountAvatar}。</p>
+     */
+    public static Location getAccountAvatarLocation(MusicPlatform platform) {
+        if (platform == MusicPlatform.KUGOU) return KuGouMusicService.getAvatarLocation();
+        if (platform == MusicPlatform.QQ) {
+            return getQQAvatarUrl().isEmpty()
+                    ? null : Location.of("muonium/textures/account/qq_avatar.png");
+        }
+        return CloudMusic.profile == null ? null : CloudMusic.profile.getAvatarLocation();
+    }
+
+    /** 同 {@link #getAccountAvatarLocation(MusicPlatform)}，取当前平台。 */
+    public static Location getAccountAvatarLocation() {
+        return getAccountAvatarLocation(getCurrentPlatform());
     }
 
     public static void refreshQQUserInfo() {

@@ -42,6 +42,7 @@ public class AccountManagerOverlay extends NCMPanel {
 
     private static final Location NETEASE_QR = Location.of("muonium/textures/account/netease_qr.png");
     private static final Location QQ_QR = Location.of("muonium/textures/account/qq_qr.png");
+    private static final Location KUGOU_QR = Location.of("muonium/textures/account/kugou_qr.png");
 
     private final AtomicLong pageGeneration = new AtomicLong();
     private volatile boolean closing;
@@ -50,8 +51,8 @@ public class AccountManagerOverlay extends NCMPanel {
     private volatile int statusColor = 0xAEB5C4;
     private volatile boolean requestRunning;
     /**
-     * The supplied QQ HTTP API has no QR/OAuth endpoint. Keep the visual choice
-     * explicit so a WeChat selection can never accidentally initiate QQ QR login.
+     * QQ 音乐有两条互不相干的扫码链路（QQ 的 ptlogin、微信开放平台的 OAuth）。这个选择必须显式保存，
+     * 才能保证选了微信之后走的是微信那条会话、而不是误用 QQ 的二维码。
      */
     private volatile QQLoginChannel qqLoginChannel = QQLoginChannel.QQ;
     private double dialogPresentation;
@@ -94,11 +95,14 @@ public class AccountManagerOverlay extends NCMPanel {
         detailPlatform = null;
         requestRunning = false;
         getChildren().clear();
-        Panel dialog = createDialog(468, 326);
+        // 三张账号卡：卡高 74、间距 14，所以纵向节奏是 78 / 166 / 254。
+        // 对话框在原来 326 的基础上 +88（一张卡 + 一个间距），底部的隐私说明按 height-58 贴底，不用另挪。
+        Panel dialog = createDialog(468, 414);
 
         addTitle(dialog, "账号与登录", "本地保存登录凭据；可分别管理音乐来源");
         addAccountCard(dialog, MusicPlatform.NETEASE, 78);
         addAccountCard(dialog, MusicPlatform.QQ, 166);
+        addAccountCard(dialog, MusicPlatform.KUGOU, 254);
 
         RoundedRectWidget privacySurface = new RoundedRectWidget();
         dialog.addChild(privacySurface);
@@ -149,8 +153,12 @@ public class AccountManagerOverlay extends NCMPanel {
             iconPlate.setColor(platform.getBrandColor());
         });
 
-        LabelWidget platformIcon = new LabelWidget(platform == MusicPlatform.QQ ? FontelloIcons.QQ : MusicBrandIcons.NETEASE_CLOUD_MUSIC,
-                platform == MusicPlatform.QQ ? FontManager.fontello18 : FontManager.musicBrand18);
+        // 酷狗两份图标字体里都没有品牌字形，用正文字体画一枚汉字字标（见 MusicBrandIcons.KUGOU_MONOGRAM）。
+        LabelWidget platformIcon = new LabelWidget(
+                platform == MusicPlatform.KUGOU ? MusicBrandIcons.KUGOU_MONOGRAM
+                        : platform == MusicPlatform.QQ ? FontelloIcons.QQ : MusicBrandIcons.NETEASE_CLOUD_MUSIC,
+                platform == MusicPlatform.KUGOU ? FontManager.pf14bold
+                        : platform == MusicPlatform.QQ ? FontManager.fontello18 : FontManager.musicBrand18);
         dialog.addChild(platformIcon);
         platformIcon.setClickable(false);
         platformIcon.setBeforeRenderCallback(() -> {
@@ -227,8 +235,10 @@ public class AccountManagerOverlay extends NCMPanel {
                 ? "正在准备扫码添加账号…"
                 : loggedIn
                 ? "当前账号已登录"
-                : (qqWechatSelected ? "微信授权接口尚未配置，不会误用 QQ 扫码" : "请选择登录方式后继续");
-        statusColor = addAccountByQr ? 0xAEB5C4 : (loggedIn ? 0x53C68C : (qqWechatSelected ? 0xD5A44A : 0xAEB5C4));
+                : (platform == MusicPlatform.QQ
+                ? (qqWechatSelected ? "已选择微信登录，点击下方按钮获取二维码" : "请选择登录方式后继续")
+                : "正在获取登录二维码…");
+        statusColor = addAccountByQr || !loggedIn ? 0xAEB5C4 : 0x53C68C;
         getChildren().clear();
         Panel dialog = createDialog(420, 390);
 
@@ -267,12 +277,14 @@ public class AccountManagerOverlay extends NCMPanel {
             qrImage.setHidden(!qrLoginVisible);
         });
 
+        // 扫码提示要说清用哪个客户端扫。原来这一支写死"网易云"，QQ / 微信 / 酷狗未登录时都会看到
+        // 一句指错客户端的提示（用户没有点出这个问题，是顺带修的，可单独回退这一处）。
         LabelWidget account = new LabelWidget(
                 () -> qrLoginVisible
-                        ? "请使用网易云客户端扫码并确认"
+                        ? "请使用" + scanClientName(platform) + "扫码并确认"
                         : CadenceMusicService.isLoggedIn(platform)
                         ? "已登录：" + CadenceMusicService.getAccountName(platform)
-                        : "请使用" + platform.getDisplayName() + "客户端扫码并确认",
+                        : "请使用" + scanClientName(platform) + "扫码并确认",
                 FontManager.pf14bold);
         dialog.addChild(account);
         account.setClickable(false);
@@ -301,9 +313,7 @@ public class AccountManagerOverlay extends NCMPanel {
                         ? (requestRunning ? "等待扫码…" : "重新获取二维码")
                         : CadenceMusicService.isLoggedIn(platform)
                         ? "退出登录"
-                        : (platform == MusicPlatform.QQ && qqLoginChannel == QQLoginChannel.WECHAT
-                        ? "微信登录暂不可用"
-                        : (requestRunning ? "等待扫码…" : "开始扫码登录")),
+                        : (requestRunning ? "等待扫码…" : "开始扫码登录"),
                 FontManager.pf12bold);
         dialog.addChild(primary);
         primary.setBounds(16, 286, 388, 30);
@@ -319,9 +329,6 @@ public class AccountManagerOverlay extends NCMPanel {
                 }
             } else if (CadenceMusicService.isLoggedIn(platform)) {
                 logout(platform);
-            } else if (platform == MusicPlatform.QQ && qqLoginChannel == QQLoginChannel.WECHAT) {
-                statusText = "当前 QQ 接口仅提供 Cookie 与内容请求，未提供微信 OAuth/二维码登录";
-                statusColor = 0xD5A44A;
             } else if (!requestRunning) {
                 startQrLogin(platform, pageGeneration.get());
             }
@@ -409,7 +416,8 @@ public class AccountManagerOverlay extends NCMPanel {
         }
         // NetEase preserves the original direct QR acquisition behavior. QQ exposes an
         // explicit channel selector so WeChat can never be treated as a QQ QR session.
-        if (platform == MusicPlatform.NETEASE && qrLoginVisible) {
+        // 酷狗只有一条扫码链路，没有可选项，所以和网易云一样进页面就直接取码。
+        if ((platform == MusicPlatform.NETEASE || platform == MusicPlatform.KUGOU) && qrLoginVisible) {
             startQrLogin(platform, token, addAccountByQr);
         }
     }
@@ -459,8 +467,8 @@ public class AccountManagerOverlay extends NCMPanel {
         wechat.setOnClickCallback((x, y, button) -> {
             if (button != 0 || requestRunning) return false;
             qqLoginChannel = QQLoginChannel.WECHAT;
-            statusText = "微信授权接口尚未配置，不会误用 QQ 扫码";
-            statusColor = 0xD5A44A;
+            statusText = "已选择微信登录，点击下方按钮获取二维码";
+            statusColor = 0x4CAF72;
             return true;
         });
 
@@ -818,9 +826,14 @@ public class AccountManagerOverlay extends NCMPanel {
         requestRunning = true;
         publishQrStatus(platform, token, "正在获取登录二维码…", 0xAEB5C4);
 
+        // 微信是一条独立的会话：取码与轮询都必须成对地走微信那两个方法。在这里一次性定下来，
+        // 循环里就不会出现"用 QQ 的码去问微信的状态"这类跨链路误用。
+        final boolean wechat = platform == MusicPlatform.QQ && qqLoginChannel == QQLoginChannel.WECHAT;
         MultiThreadingUtil.runAsync(() -> {
             try {
-                QrCode qr = CadenceMusicService.createQrCode(platform);
+                QrCode qr = wechat
+                        ? CadenceMusicService.createQqWechatQrCode()
+                        : CadenceMusicService.createQrCode(platform);
                 if (!isCurrent(platform, token)) return;
                 loadQrTexture(platform, qr.getQrContent(), token);
                 publishQrStatus(platform, token, "等待扫码 · 正在持续检查登录状态…", 0xAEB5C4);
@@ -830,7 +843,9 @@ public class AccountManagerOverlay extends NCMPanel {
                         // The QR code has already initialized Cadence's login session.  Do not
                         // reapply the old Netease cookie on every poll: doing so invalidates a
                         // newly scanned account before Cadence can persist it.
-                        QrLoginState state = CadenceMusicService.checkQrCodeSession(platform, qr);
+                        QrLoginState state = wechat
+                                ? CadenceMusicService.checkQqWechatQrCode(qr)
+                                : CadenceMusicService.checkQrCodeSession(platform, qr);
                     if (!isCurrent(platform, token)) return;
                     if (state == QrLoginState.WAITING) {
                         transientErrors = 0;
@@ -849,9 +864,10 @@ public class AccountManagerOverlay extends NCMPanel {
                                 throw new IllegalStateException("登录资料加载失败");
                             }
                             NeteaseAccountProfiles.saveCurrent();
-                        } else {
+                        } else if (platform == MusicPlatform.QQ) {
                             CadenceMusicService.refreshQQAccountData();
                         }
+                        // 酷狗的资料与歌单已经在 checkQrCodeSession 确认那一刻异步拉起，这里不再重复。
                         requestRunning = false;
                         publishQrStatus(platform, token, addAccountByQr ? "扫码成功，账号已添加" : "登录成功", 0x53C68C);
                         DownloadDynamicIsland.showNetworkConnectionSuccess(platform.getDisplayName() + "账号");
@@ -951,7 +967,16 @@ public class AccountManagerOverlay extends NCMPanel {
     }
 
     private Location getQrLocation(MusicPlatform platform) {
+        if (platform == MusicPlatform.KUGOU) return KUGOU_QR;
         return platform == MusicPlatform.QQ ? QQ_QR : NETEASE_QR;
+    }
+
+    /** 扫码提示里该出现的客户端名。微信那条链路要扫的是微信，不是 QQ 音乐。 */
+    private String scanClientName(MusicPlatform platform) {
+        if (platform == MusicPlatform.QQ && qqLoginChannel == QQLoginChannel.WECHAT) return "微信";
+        if (platform == MusicPlatform.KUGOU) return "酷狗音乐客户端";
+        if (platform == MusicPlatform.QQ) return "手机 QQ";
+        return "网易云音乐客户端";
     }
 
     private String safeMessage(Throwable throwable) {

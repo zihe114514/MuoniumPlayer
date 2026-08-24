@@ -195,6 +195,14 @@ public class PlayList {
                 if (loadedMusics == null) {
                     throw new IllegalStateException("QQ playlist track response is null");
                 }
+            } else if (getPlatform() == MusicPlatform.KUGOU) {
+                // 酷狗有三种歌单（精选 specialid / 榜单 rankid / 用户 global_collection_id），
+                // 取曲目的端点不同，前缀编码在 platformPlaylistId 里，由服务层分派。
+                loadedMusics = com.muoniumplayer.core.ncm.music.KuGouMusicService
+                        .playlistTracks(getPlatformPlaylistId());
+                if (loadedMusics == null) {
+                    throw new IllegalStateException("KuGou playlist track response is null");
+                }
             } else {
                 RequestUtil.RequestAnswer requestAnswer = CloudMusicApi.playlistTrackAll(id, 8);
                 JsonObject response = requestAnswer.toJsonObject();

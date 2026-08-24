@@ -25,6 +25,15 @@ public final class ConfigPaths {
     /** User-selected GD Studio aggregated platform (netease/joox/...), persisted separately. */
     public static final File GD_SOURCE = new File("config", "muonium/gd_source.json");
 
+    /**
+     * 酷狗的设备标识与登录凭证。
+     *
+     * <p>不能塞进 {@link #MUSIC_AUTH}：那个文件由 Cadence（{@code music-api} 库）的
+     * {@code MusicCredentialStore} 独占读写，它只认识网易云 cookie 与 QQ 的 musicid/musickey，
+     * 写进去的第三个平台会在它下一次保存时被整段丢掉。</p>
+     */
+    public static final File KUGOU_AUTH = new File("config", "muonium/kugou_auth.json");
+
     /** Automix (seamless track handover) preferences. */
     public static final File AUTOMIX = new File("config", "muonium/automix.json");
 
