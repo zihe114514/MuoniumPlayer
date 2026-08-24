@@ -50,6 +50,44 @@ final class AutomixAnalyzer {
     private static final double PEAK_FIT_PRECISION = .12;
 
     /**
+     * 谱通量的帧长与帧移，秒。取 BeatRoot 原始参数（44.1kHz 下的 2048 / 512 点）。
+     *
+     * <p>不能改成本类原有的 {@link #HOP}：22.05kHz 下那是 23.2ms 一格，而 BeatRoot 的整套参数
+     * （IOI 聚类宽度 25ms、内窗 40ms）都是按 11.6ms 分辨率的 onset 时刻调出来的，喂 23.2ms 的
+     * 量化时刻进去，聚类宽度里只能装下一格，速度假设会碎成一堆。</p>
+     */
+    private static final double FLUX_FRAME_SECONDS = .04644;
+    private static final double FLUX_HOP_SECONDS = .011609;
+    /**
+     * BeatRoot 网格低于这个置信度就不如退回自相关。
+     *
+     * <p>比 {@code AutomixPlanner.MIN_GRID_CONFIDENCE}（.28）低一档：这里只是决定「两个测速
+     * 方法用哪个」，真正「这条网格能不能用」还要再过一遍那个门槛。</p>
+     */
+    private static final float MIN_BEATROOT_CONFIDENCE = .18f;
+    /** 两种测速方法的速度相差在这个比例内就算彼此印证。 */
+    private static final float TEMPO_AGREEMENT = .03f;
+    /** 彼此印证时给置信度的加成。 */
+    private static final float AGREEMENT_BONUS = 1.15f;
+    /** 彼此矛盾时给置信度打的折。 */
+    private static final float DISAGREEMENT_DISCOUNT = .70f;
+    /** selectivity 到这里就算健康：鼓上带镲时只有一半 onset 会被采纳为拍。 */
+    private static final float MIN_HEALTHY_SELECTIVITY = .45f;
+    /** 拍点残差按拍长归一后到这个比例就算完全不规整。 */
+    private static final double RESIDUAL_TOLERANCE = .06;
+    /** 绝对静音门限（dB）。低于这个电平的一段当作「文件里的空白」，不是「安静的音乐」。 */
+    private static final double SILENCE_FLOOR_DB = repackage.be.tarsos.dsp.SilenceDetector
+            .DEFAULT_SILENCE_THRESHOLD;
+    /** 稳健响度参考取到这个分位，避免一声拍手把参考电平顶上去。 */
+    private static final double LOUDNESS_PERCENTILE = .95;
+    /** 入场门限，相对稳健参考的 dB。-8dB 约等于原来的「峰值 40%」。 */
+    private static final double ENTRANCE_DB = -8.0;
+    /** 入场之后要维持住的门限，相对稳健参考的 dB。-10.5dB 约等于原来的「峰值 30%」。 */
+    private static final double SUSTAIN_DB = -10.5;
+    /** {@code FourierMath} 懒初始化静态表的发布锁，见 {@link #spectralFlux}。 */
+    private static final Object FFT_TABLE_LOCK = new Object();
+
+    /**
      * Block length for the chroma analysis, ~372 ms at 22.05 kHz. The Goertzel bin is then ~2.7 Hz wide,
      * which still separates adjacent semitones at the bottom of the analysed range (7.8 Hz apart at C3)
      * while being short enough that a chord change does not smear across the whole window.
@@ -324,6 +362,20 @@ final class AutomixAnalyzer {
      * @return the grid, or {@code null} when the window is too short or effectively silent.
      */
     static BeatGrid analyzeBeats(float[] mono, int sampleRate) {
+        BeatGrid autocorrelated = autocorrelationGrid(mono, sampleRate);
+        // 自相关都立不起网格（窗口太短、或者整段几乎没有能量变化）时不让 BeatRoot 顶上来：
+        // 那种素材上「测不出节拍」本身就是正确答案，硬凑一条网格出来只会让 planner 去对齐一条
+        // 不存在的小节线。
+        if (autocorrelated == null) return null;
+        return preferBeatRoot(mono, sampleRate, autocorrelated);
+    }
+
+    /**
+     * 原来的测速路径：onset 能量通量的自相关。现在只作为 {@link #preferBeatRoot} 的兜底与对照。
+     *
+     * @return the grid, or {@code null} when the window is too short or effectively silent.
+     */
+    static BeatGrid autocorrelationGrid(float[] mono, int sampleRate) {
         if (mono == null || sampleRate <= 0) return null;
         int hops = mono.length / HOP;
         if (hops < 16) return null;
@@ -448,7 +500,9 @@ final class AutomixAnalyzer {
         //     to do by accident — returns offsets that are not on the grid at all.
         int barLag = bestLag * 4;
         float tolerance = (float) (PEAK_FIT_PRECISION / refinedLag);
-        if (barLag >= hops) return new BeatGrid(bpm, phaseMillis, phaseMillis, confidence, tolerance);
+        if (barLag >= hops) {
+            return new BeatGrid(bpm, phaseMillis, phaseMillis, confidence, tolerance);
+        }
 
         float bestBarSum = Float.NEGATIVE_INFINITY;
         int bestBarOffset = bestOffset;
@@ -468,6 +522,202 @@ final class AutomixAnalyzer {
     }
 
     /**
+     * 用 BeatRoot 的多智能体节拍跟踪重测一次，测得比自相关好就用它的结果。
+     *
+     * <p>自相关只回答「平均隔多久有一下」，相位得靠脉冲串套出来；BeatRoot 直接给出<b>每一拍在哪</b>，
+     * 于是相位是真实拍点、速度是这条拍点列表的回归斜率、精度是斜率的标准误 —— 三个数都不再是估的。</p>
+     *
+     * <p>两者的关系是<b>互相印证</b>而不是替换：速度对得上就给置信度加成，对不上就给 BeatRoot 打折
+     * （仍然用它的速度：它才是有拍点证据的那一方），BeatRoot 立不起网格时原样退回自相关的结果。
+     * 所以这条路只会让结果更好或者不变，不会凭空变差。</p>
+     *
+     * @param fallback 自相关测出来的网格，非 {@code null}
+     */
+    private static BeatGrid preferBeatRoot(float[] mono, int sampleRate, BeatGrid fallback) {
+        try {
+            int hopSize = (int) Math.round(sampleRate * FLUX_HOP_SECONDS);
+            if (hopSize < 32) return fallback;
+            int fftSize = 1;
+            int wanted = (int) Math.round(sampleRate * FLUX_FRAME_SECONDS);
+            while (fftSize < wanted) fftSize <<= 1;
+            if (mono.length < fftSize + hopSize * 32) return fallback;
+
+            double[] flux = spectralFlux(mono, fftSize, hopSize);
+            if (flux == null) return fallback;
+            // track() 会原地归一化，而下面挑小节相位还要用原始通量，所以留一份。
+            double[] rawFlux = new double[flux.length];
+            System.arraycopy(flux, 0, rawFlux, 0, flux.length);
+
+            double hopSeconds = hopSize / (double) sampleRate;
+            repackage.be.tarsos.dsp.beatroot.BeatRootTracker.Result result =
+                    repackage.be.tarsos.dsp.beatroot.BeatRootTracker.track(flux, hopSeconds);
+            if (result == null) return fallback;
+
+            // 1. 节拍层级。BeatRoot 只保证把周期折进 60~200 BPM，它经常锁在八分音符上
+            //    （鼓 + 闭合镲的素材实测就是这样），于是一首 100 BPM 的歌会报 200。
+            //    用自相关那个数当锚点来折，比硬折进 [MIN_BPM, MAX_BPM] 靠得住得多：后者对
+            //    「88 BPM 被报成 176」这种恰好落在范围内的情况完全无能为力。
+            float bpm = octaveNormalise((float) result.bpm(), fallback.bpm);
+            while (bpm < MIN_BPM) bpm *= 2f;
+            while (bpm > MAX_BPM) bpm /= 2f;
+            if (bpm < MIN_BPM || bpm > MAX_BPM) return fallback;
+
+            // 2. 相位。谱通量把 onset 时刻系统性地报早了：一帧覆盖 fftSize 个采样，鼓头落进
+            //    第一个<b>包含</b>它的帧，而那一帧的起点最早可以比鼓头早整整一个帧长。取帧中心
+            //    作为时刻是通行做法，实测正好把偏差从 -27ms 拉回 0 附近。
+            float frameCentreMillis = fftSize * 500f / sampleRate;
+            float beatPeriod = 60_000f / bpm;
+            double originMillis = result.gridOriginSeconds * 1000.0 + frameCentreMillis;
+            // 网格原点可能是负的（回归外推到第 0 拍），取模后补回正区间。
+            float phaseMillis = (float) (originMillis % beatPeriod);
+            if (phaseMillis < 0f) phaseMillis += beatPeriod;
+
+            // 3. 置信度。这里<b>不能</b>用「拍点拟合得多好」当证据：onset 密的素材上（噪声、
+            //    持续音、念白）总能挑出一串间隔相等的 onset 来，拟合残差一样小，
+            //    matchedFraction 甚至能到 1.0 —— 实测一段没有节拍的双音 pad 就是这样。
+            //    真正能区分「有没有拍」的是两件事：
+            //      selectivity：被采纳为拍的 onset 占全部 onset 的比例。真有鼓的素材上 onset
+            //        本来就都落在拍或八分位上（实测 0.5~1.0），而噪声与持续音的 onset 满地都是
+            //        （实测 0.25~0.34）。0.45 以上都算正常，所以到那里就封顶。
+            //      regularity：拍点相对拟合网格的残差，按拍长归一。真鼓 1~2%，念白 5%，噪声 15%。
+            float selectivity = result.onsetCount > 0
+                    ? result.matchedBeats / (float) result.onsetCount : 0f;
+            float selectivityScore = Math.min(1f, selectivity / MIN_HEALTHY_SELECTIVITY);
+            float regularity = (float) (1.0 - result.residualSeconds
+                    / (RESIDUAL_TOLERANCE * Math.max(1e-6, result.beatIntervalSeconds)));
+            if (regularity < 0f) regularity = 0f;
+            if (regularity > 1f) regularity = 1f;
+            float quality = selectivityScore * regularity;
+
+            boolean agrees = Math.abs(bpm - fallback.bpm) <= fallback.bpm * TEMPO_AGREEMENT;
+            float confidence;
+            if (agrees) {
+                // 两个独立方法测出同一个速度，取高的那个再给一点加成。
+                confidence = Math.min(1f,
+                        Math.max(quality, fallback.confidence) * AGREEMENT_BONUS);
+            } else {
+                // 各说各话：取低的那个再打折。仍然用 BeatRoot 的速度与相位（它才有逐拍证据），
+                // 但绝不让这种情况下的网格顶着高置信度去触发节奏锁定。
+                confidence = Math.min(quality, fallback.confidence) * DISAGREEMENT_DISCOUNT;
+            }
+            if (confidence < MIN_BEATROOT_CONFIDENCE) return fallback;
+
+            float barPhaseMillis = pickBarPhase(rawFlux, hopSeconds, frameCentreMillis,
+                    phaseMillis, beatPeriod);
+            return new BeatGrid(bpm, phaseMillis, barPhaseMillis, confidence,
+                    (float) result.tempoTolerance);
+        } catch (RuntimeException ignored) {
+            // 分析永远不能让一次交接失败：测不出来就用自相关那份。
+            return fallback;
+        }
+    }
+
+    /**
+     * 在 {@code phaseMillis + k·beatPeriod}（{@code k} 取 0..3）里挑一个当小节头：四个候选各自
+     * 隔四拍取一次通量求和，最响的那一路就是 downbeat。
+     *
+     * <p>只测这四个偏移，所以答案一定落在拍上，而不是拍与拍之间的某个点。</p>
+     */
+    private static float pickBarPhase(double[] flux, double hopSeconds, float frameCentreMillis,
+                                      float phaseMillis, float beatPeriod) {
+        double barPeriod = beatPeriod * 4.0;
+        float best = phaseMillis;
+        double bestSum = Double.NEGATIVE_INFINITY;
+        for (int beat = 0; beat < 4; beat++) {
+            double offset = phaseMillis + beat * (double) beatPeriod;
+            double sum = 0.0;
+            int counted = 0;
+            for (double at = offset; ; at += barPeriod) {
+                // 时刻里含了帧中心的偏移，回到帧下标时要减掉。
+                int hop = (int) Math.round((at - frameCentreMillis) / 1000.0 / hopSeconds);
+                if (hop >= flux.length) break;
+                if (hop >= 0) {
+                    sum += flux[hop];
+                    counted++;
+                }
+            }
+            // 四个候选覆盖的拍数可能差一格，按拍数取平均才公平。
+            double score = counted > 0 ? sum / counted : Double.NEGATIVE_INFINITY;
+            if (score > bestSum) {
+                bestSum = score;
+                best = (float) offset;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * 谱通量 onset 强度：相邻两帧幅度谱里<b>变大</b>的那部分求和。
+     *
+     * <p>移植自 TarsosDSP 的 {@code BeatRootSpectralFluxOnsetDetector}（它自己也是 Simon Dixon 的
+     * BeatRoot 那一版）。比本类原有的能量通量灵敏得多：能量通量只看总响度的变化，一个和弦换成
+     * 另一个等响的和弦它一点反应都没有，而谱通量会看到能量在频率上搬了家。</p>
+     *
+     * <h3>与上游的不同</h3>
+     * <ul>
+     *   <li>窗函数用 Hamming 的精确系数（25/46、21/46），上游是 {@code ScaledHammingWindow}
+     *       —— 同一个形状乘一个常数。后面 {@code Peaks.normalise} 要做 z-score，常数会被完全约掉，
+     *       所以这个差别在结果上是零。</li>
+     *   <li>只算幅度不算相位：上游的 {@code powerPhaseFFTBeatRootOnset} 会顺带填一个相位数组，
+     *       但通量只用到幅度。</li>
+     *   <li>没有上游那套 {@code frames[][]} / {@code energy[]} / {@code ltAverage} 归一化。那些是给
+     *       画频谱图和别的检测器用的，通量本身不经过它们。</li>
+     * </ul>
+     */
+    static double[] spectralFlux(float[] mono, int fftSize, int hopSize) {
+        if (mono == null || fftSize < 8 || hopSize < 1) return null;
+        int frames = (mono.length - fftSize) / hopSize + 1;
+        if (frames < 32) return null;
+
+        float[] window = new float[fftSize];
+        double factor = 2.0 * Math.PI / (fftSize - 1);
+        for (int index = 0; index < fftSize; index++) {
+            window[index] = (float) (25.0 / 46.0 - 21.0 / 46.0 * Math.cos(factor * index));
+        }
+
+        int bins = fftSize / 2;
+        float[] real = new float[fftSize];
+        float[] imaginary = new float[fftSize];
+        float[] previous = new float[bins];
+        float[] magnitude = new float[bins];
+        double[] flux = new double[frames];
+
+        for (int frame = 0; frame < frames; frame++) {
+            int base = frame * hopSize;
+            for (int index = 0; index < fftSize; index++) {
+                real[index] = mono[base + index] * window[index];
+                imaginary[index] = 0f;
+            }
+            if (frame == 0) {
+                // FourierMath 的正弦表与位反转表是懒初始化的静态数组，没有任何同步。分析跑在
+                // 后台线程池上（最多两条并发），第一次调用统一在一个锁里做，另一条线程在同一个
+                // 锁上进出一次之后就一定能看到建好的表，后面的帧不用再进锁。
+                synchronized (FFT_TABLE_LOCK) {
+                    repackage.com.jsyn.util.FourierMath.transform(1, fftSize, real, imaginary);
+                }
+            } else {
+                repackage.com.jsyn.util.FourierMath.transform(1, fftSize, real, imaginary);
+            }
+            double sum = 0.0;
+            for (int bin = 0; bin < bins; bin++) {
+                float value = (float) Math.sqrt(real[bin] * real[bin]
+                        + imaginary[bin] * imaginary[bin]);
+                magnitude[bin] = value;
+                if (value > previous[bin]) sum += value - previous[bin];
+            }
+            // 第 0 帧没有上一帧可比，通量按 0 记。上游那里 previous 是全零，于是第 0 帧的通量等于
+            // 整帧幅度之和 —— 上游从文件开头（通常近乎静音）起算所以无害，而本项目的分析窗可能
+            // 从副歌中间开始，那个离群的巨值会把后面 z-score 的标准差顶高一大截，真正的鼓点反而
+            // 全被 0.35σ 的门限挡掉。
+            flux[frame] = frame == 0 ? 0.0 : sum;
+            float[] swap = previous;
+            previous = magnitude;
+            magnitude = swap;
+        }
+        return flux;
+    }
+
+    /**
      * Finds where an intro ends: the first hop that reaches a meaningful share of the window peak and
      * then stays there for about a second. A single drum hit is not an entrance, so the sustain check
      * matters more than the step itself.
@@ -480,25 +730,28 @@ final class AutomixAnalyzer {
         if (hops < 16) return 0f;
 
         float[] levels = new float[hops];
-        float peak = 0f;
         for (int hop = 0; hop < hops; hop++) {
-            int base = hop * HOP;
-            double squared = 0.0;
-            for (int index = 0; index < HOP; index++) {
-                float value = mono[base + index];
-                squared += (double) value * value;
-            }
-            levels[hop] = (float) Math.sqrt(squared / HOP);
-            if (levels[hop] > peak) peak = levels[hop];
+            levels[hop] = (float) repackage.be.tarsos.dsp.SilenceDetector
+                    .calculateRMS(mono, hop * HOP, HOP);
         }
-        if (peak < .001f) return 0f;
 
         float millisPerHop = HOP * 1000f / sampleRate;
-        int sustainHops = Math.max(4, Math.round(1000f / millisPerHop));
-        float entranceFloor = peak * .40f;
-        float sustainFloor = peak * .30f;
+        // 1. 文件里真正开始有信号的位置。要求连续 120ms 都在绝对静音门限之上，一次爆音不算。
+        int audibleHops = Math.max(2, Math.round(120f / millisPerHop));
+        int audioStart = firstAudibleHop(levels, audibleHops);
+        if (audioStart < 0) return 0f;
 
-        for (int hop = 0; hop < hops; hop++) {
+        // 2. 稳健响度参考。原来这里用的是窗口峰值，于是整首歌里最响的那一下（一次拍手、一次
+        //    军鼓滚奏的尖峰）会把参考电平顶高，入场门限跟着抬上去，前奏就再也测不出来。
+        //    取 95 分位数之后单个离群样点影响不到参考。
+        float reference = percentile(levels, LOUDNESS_PERCENTILE);
+        if (reference < .001f) return 0f;
+
+        float entranceFloor = (float) (reference * Math.pow(10.0, ENTRANCE_DB / 20.0));
+        float sustainFloor = (float) (reference * Math.pow(10.0, SUSTAIN_DB / 20.0));
+        int sustainHops = Math.max(4, Math.round(1000f / millisPerHop));
+
+        for (int hop = audioStart; hop < hops; hop++) {
             if (levels[hop] < entranceFloor) continue;
             int end = Math.min(hops, hop + sustainHops);
             boolean sustained = true;
@@ -509,12 +762,65 @@ final class AutomixAnalyzer {
                 }
             }
             // Back off a hair so the entry lands on the last quiet beat rather than clipping the
-            // downbeat that starts the song.
-            if (sustained) return Math.max(0f, hop * millisPerHop - INTRO_BACKOFF_MILLIS);
+            // downbeat that starts the song. 但退不到曲首之前 —— 那边是文件空白，不是音乐。
+            if (sustained) {
+                float entry = hop * millisPerHop - INTRO_BACKOFF_MILLIS;
+                return Math.max(audioStart * millisPerHop, Math.max(0f, entry));
+            }
         }
 
-        // Nothing sustained (a quiet or spoken opening): do not invent a landing point.
-        return 0f;
+        // 测不到入场（整首都很轻、或者开头是念白）：至少把文件开头那段空白跳掉。原来这里返回 0，
+        // 于是一首前面挂了两秒静音的歌，「跳过前奏」一秒都不跳，新歌淡入时听到的是两秒无声。
+        return audioStart * millisPerHop;
+    }
+
+    /**
+     * 第一个「连续 {@code needed} 格都不是静音」的位置，没有则 {@code -1}。
+     *
+     * <p>用的是绝对 dB 门限（见 {@link #SILENCE_FLOOR_DB}）。相对门限在这里根本没法用：它只有
+     * 「比别处安静」没有「安静」，一段纯数字静音和一段极轻的铺底在它眼里一模一样。</p>
+     */
+    private static int firstAudibleHop(float[] levels, int needed) {
+        int run = 0;
+        for (int hop = 0; hop < levels.length; hop++) {
+            boolean audible = repackage.be.tarsos.dsp.SilenceDetector
+                    .linearToDecibel(levels[hop]) >= SILENCE_FLOOR_DB;
+            if (audible) {
+                run++;
+                if (run >= needed) return hop - run + 1;
+            } else {
+                run = 0;
+            }
+        }
+        return -1;
+    }
+
+    /** 最后一个「连续 {@code needed} 格都不是静音」的段落的末格，没有则 {@code -1}。 */
+    private static int lastAudibleHop(float[] levels, int limit, int needed) {
+        int run = 0;
+        for (int hop = Math.min(limit, levels.length) - 1; hop >= 0; hop--) {
+            boolean audible = repackage.be.tarsos.dsp.SilenceDetector
+                    .linearToDecibel(levels[hop]) >= SILENCE_FLOOR_DB;
+            if (audible) {
+                run++;
+                if (run >= needed) return hop + run - 1;
+            } else {
+                run = 0;
+            }
+        }
+        return -1;
+    }
+
+    /** {@code fraction} 分位数（0..1），用一份排序副本算，不动入参。 */
+    private static float percentile(float[] values, double fraction) {
+        if (values.length == 0) return 0f;
+        float[] sorted = new float[values.length];
+        System.arraycopy(values, 0, sorted, 0, values.length);
+        java.util.Arrays.sort(sorted);
+        int index = (int) Math.round(fraction * (sorted.length - 1));
+        if (index < 0) index = 0;
+        if (index >= sorted.length) index = sorted.length - 1;
+        return sorted[index];
     }
 
     /**
@@ -535,23 +841,29 @@ final class AutomixAnalyzer {
         if (hops < 8) return -1f;
 
         float[] levels = new float[hops];
+        for (int index = 0; index < hops; index++) {
+            levels[index] = (float) repackage.be.tarsos.dsp.SilenceDetector
+                    .calculateRMS(mono, index * hop, hop);
+        }
+
+        float millisPerHop = hop * 1000f / sampleRate;
+        // 文件尾巴上那段空白不算音乐。不切掉的话下面两条兜底都会掉进去：「最后一段持续安静的空隙」
+        // 会命中静音本身，「最后 15 秒里最轻的一格」更是必然落在静音里，于是混出点被摆到
+        // 已经没声音的地方，听起来是旧歌提前几秒就没了。
+        int audibleHops = Math.max(2, Math.round(120f / millisPerHop));
+        int lastAudible = lastAudibleHop(levels, hops, audibleHops);
+        if (lastAudible < 0) return -1f;
+        hops = lastAudible + 1;
+        if (hops < 8) return -1f;
+
         double sum = 0.0;
         float peak = 0f;
         for (int index = 0; index < hops; index++) {
-            int base = index * hop;
-            double squared = 0.0;
-            for (int offset = 0; offset < hop; offset++) {
-                float value = mono[base + offset];
-                squared += (double) value * value;
-            }
-            levels[index] = (float) Math.sqrt(squared / hop);
             sum += levels[index];
             if (levels[index] > peak) peak = levels[index];
         }
         float mean = (float) (sum / hops);
         if (mean < 1e-4f) return -1f;
-
-        float millisPerHop = hop * 1000f / sampleRate;
         float highFloor = peak * .70f;
         float dropFloor = mean * .55f;
         int neededHigh = Math.max(2, Math.round(2000f / millisPerHop));
