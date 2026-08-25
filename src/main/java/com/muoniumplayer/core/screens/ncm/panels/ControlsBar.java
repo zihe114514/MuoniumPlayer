@@ -4,10 +4,14 @@ import org.lwjgl.input.Mouse;
 import com.muoniumplayer.core.management.FontManager;
 import com.muoniumplayer.core.ncm.music.AudioPlayer;
 import com.muoniumplayer.core.ncm.music.AutomixSettings;
+import com.muoniumplayer.core.ncm.music.CadenceMusicService;
 import com.muoniumplayer.core.ncm.music.CloudMusic;
+import com.muoniumplayer.core.ncm.music.MusicPlatform;
+import com.muoniumplayer.core.ncm.music.NeteaseListenTogetherService;
 import com.muoniumplayer.core.ncm.music.PersonalFmManager;
 import com.muoniumplayer.core.screens.ncm.NCMPlayerConfig;
 import com.muoniumplayer.core.rendering.DownloadDynamicIsland;
+import com.muoniumplayer.core.rendering.FontelloIcons;
 import com.muoniumplayer.core.rendering.PlayerQueueIcons;
 import com.muoniumplayer.core.rendering.animation.Interpolations;
 import com.muoniumplayer.core.ncm.music.Quality;
@@ -510,6 +514,33 @@ public class ControlsBar extends NCMPanel {
         queueCount.setBeforeRenderCallback(() -> queueCount
                 .setColor(NCMScreen.getColor(NCMScreen.ColorType.ACCENT))
                 .setPosition(queueToggle.getWidth() - 3.0, -1.0));
+
+        // 一起听入口排在待播列表按钮左边，沿用同一条锚点链。
+        // 只在网易云官方源下可用（房间与邀请都依赖网易云登录态），其余来源下用 alpha 隐形并停止
+        // 响应，而不是 setHidden —— 被隐藏的组件不再执行自己的回调，也就没机会把自己显示回来。
+        IconWidget listenTogether = new IconWidget(FontelloIcons.ACCOUNT_ADD, FontManager.fontello16, 0, 0, 18, 18);
+        this.addChild(listenTogether);
+        listenTogether.setShouldOverrideMouseCursor(true);
+        listenTogether.setBeforeRenderCallback(() -> {
+            boolean netease = CadenceMusicService.getCurrentPlatform() == MusicPlatform.NETEASE;
+            double toggleX = queueToggle.getRelativeX() - 8.0 - listenTogether.getWidth();
+            boolean fits = toggleX > lblRemainingTime.getRelativeX() + lblRemainingTime.getWidth() + 6.0;
+            boolean usable = netease && fits;
+            listenTogether
+                    .setClickable(usable)
+                    .setAlpha(usable ? ControlsBar.this.getAlpha() : 0f)
+                    .centerVertically();
+            listenTogether
+                    .setPosition(toggleX, listenTogether.getRelativeY())
+                    .setColor(NeteaseListenTogetherService.isActive()
+                            ? NCMScreen.getColor(NCMScreen.ColorType.ACCENT)
+                            : NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT));
+        });
+        listenTogether.setOnClickCallback((relativeX, relativeY, mouseButton) -> {
+            if (mouseButton != 0) return false;
+            NCMScreen.getInstance().openListenTogether();
+            return true;
+        });
 
         // The menu is declared after the selector, therefore it is rendered and hit-tested on
         // top of the bottom bar.  It grows upward so it never covers the compact controls.

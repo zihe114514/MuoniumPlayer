@@ -25,6 +25,138 @@ import java.util.stream.Collectors;
 @UtilityClass
 public class CloudMusicApi {
 
+    // ── 一起听（listen together）─────────────────────────────────────────────
+    //
+    // 端点与参数按 api-enhanced 的 module/listentogether_*.js 一一对应，走默认 eapi
+    // （`status/get` 上游用的是 weapi，这里保持一致）。
+    //
+    // 上游<b>没有</b>「拉取主机指令」的端点：真实客户端靠一条长连接接收推送。因此本项目里
+    // 主机侧是完整的（建房 → 上报 → 心跳 → 结束），客机侧只能主动拉（接受邀请、房间快照、
+    // 房间播放列表），不能自动跟随主机的每一次暂停/切歌。
+
+    /** 一起听：创建房间。返回 {@code data.roomInfo.roomId}。 */
+    public RequestUtil.RequestAnswer listenTogetherRoomCreate() {
+        Map<String, Object> data = new HashMap<>();
+        data.put("refer", "songplay_more");
+        return RequestUtil.createRequest("/api/listen/together/room/create", data, OptionsUtil.createOptions());
+    }
+
+    /**
+     * 一起听：房间快照。
+     *
+     * <p>建房之后上游要求紧跟一次 check，房间才真正进入可邀请状态（参考实现里 create 之后
+     * 立刻调它，且忽略返回值）。</p>
+     */
+    public RequestUtil.RequestAnswer listenTogetherRoomCheck(String roomId) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("roomId", roomId);
+        return RequestUtil.createRequest("/api/listen/together/room/check", data, OptionsUtil.createOptions());
+    }
+
+    /** 一起听：当前账号的房间状态，含 {@code data.inRoom} 与 {@code data.roomInfo.roomUsers}。 */
+    public RequestUtil.RequestAnswer listenTogetherStatus() {
+        return RequestUtil.createRequest("/api/listen/together/status/get", new HashMap<>(),
+                OptionsUtil.createOptions("weapi"));
+    }
+
+    /** 一起听：接受邀请加入房间。 */
+    public RequestUtil.RequestAnswer listenTogetherAccept(String roomId, long inviterId) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("refer", "inbox_invite");
+        data.put("roomId", roomId);
+        data.put("inviterId", inviterId);
+        return RequestUtil.createRequest("/api/listen/together/play/invitation/accept", data,
+                OptionsUtil.createOptions());
+    }
+
+    /** 一起听：结束房间。 */
+    public RequestUtil.RequestAnswer listenTogetherEnd(String roomId) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("roomId", roomId);
+        return RequestUtil.createRequest("/api/listen/together/end/v2", data, OptionsUtil.createOptions());
+    }
+
+    /** 一起听：心跳保活。{@code playStatus} 取 {@code PLAY} / {@code PAUSE}，{@code progress} 单位毫秒。 */
+    public RequestUtil.RequestAnswer listenTogetherHeartbeat(String roomId, long songId,
+                                                            String playStatus, long progressMillis) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("roomId", roomId);
+        data.put("songId", songId);
+        data.put("playStatus", playStatus);
+        data.put("progress", progressMillis);
+        return RequestUtil.createRequest("/api/listen/together/heartbeat", data, OptionsUtil.createOptions());
+    }
+
+    /**
+     * 一起听：上报一条播放指令。
+     *
+     * <p>{@code commandInfo} 是<b>一个 JSON 字符串</b>而不是嵌套对象（上游就这么要求），
+     * 所以这里手工序列化后再作为普通字段传进去。</p>
+     *
+     * @param commandType {@code PLAY} / {@code PAUSE} / {@code SEEK} / {@code GOTO}
+     * @param clientSeq   客户端自增序号，用于让服务端丢弃过期指令
+     */
+    public RequestUtil.RequestAnswer listenTogetherPlayCommand(String roomId, String commandType,
+                                                              long progressMillis, String playStatus,
+                                                              long formerSongId, long targetSongId,
+                                                              long clientSeq) {
+        JsonObject commandInfo = new JsonObject();
+        commandInfo.addProperty("commandType", commandType);
+        commandInfo.addProperty("progress", progressMillis);
+        commandInfo.addProperty("playStatus", playStatus);
+        commandInfo.addProperty("formerSongId", String.valueOf(formerSongId));
+        commandInfo.addProperty("targetSongId", String.valueOf(targetSongId));
+        commandInfo.addProperty("clientSeq", clientSeq);
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("roomId", roomId);
+        data.put("commandInfo", commandInfo.toString());
+        return RequestUtil.createRequest("/api/listen/together/play/command/report", data,
+                OptionsUtil.createOptions());
+    }
+
+    /**
+     * 一起听：同步房间播放列表。
+     *
+     * @param commandType 参考实现只用 {@code REPLACE}
+     * @param songIds     逗号分隔的网易云 songId，顺序即播放顺序
+     */
+    public RequestUtil.RequestAnswer listenTogetherSyncList(String roomId, String commandType,
+                                                            long userId, long version, String songIds) {
+        JsonArray versions = new JsonArray();
+        JsonObject versionEntry = new JsonObject();
+        versionEntry.addProperty("userId", userId);
+        versionEntry.addProperty("version", version);
+        versions.add(versionEntry);
+
+        JsonArray ids = new JsonArray();
+        for (String id : (songIds == null ? "" : songIds).split(",")) {
+            if (!id.trim().isEmpty()) ids.add(id.trim());
+        }
+
+        JsonObject param = new JsonObject();
+        param.addProperty("commandType", commandType);
+        param.add("version", versions);
+        param.addProperty("anchorSongId", "");
+        param.addProperty("anchorPosition", -1);
+        param.add("randomList", ids);
+        param.add("displayList", ids);
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("roomId", roomId);
+        data.put("playlistParam", param.toString());
+        return RequestUtil.createRequest("/api/listen/together/sync/list/command/report", data,
+                OptionsUtil.createOptions());
+    }
+
+    /** 一起听：读取房间当前播放列表。 */
+    public RequestUtil.RequestAnswer listenTogetherPlaylistGet(String roomId) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("roomId", roomId);
+        return RequestUtil.createRequest("/api/listen/together/sync/playlist/get", data,
+                OptionsUtil.createOptions());
+    }
+
     /** Requests NetEase dynamic-cover metadata for a signed-in song. */
     public RequestUtil.RequestAnswer songDynamicCover(long id) {
         Map<String, Object> data = new HashMap<>();

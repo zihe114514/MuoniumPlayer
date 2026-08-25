@@ -1,6 +1,6 @@
 # MuoniumPlayer
 
-**在 Minecraft 里放歌的独立播放器 Mod。** 网易云 / QQ 音乐 / 酷狗音乐扫码登录、逐字歌词、桌面 HUD、灵动岛通知、无缝切歌，全部在游戏内完成，不需要挂后台播放器。
+**在 Minecraft 里放歌的独立播放器 Mod。** 网易云 / QQ 音乐 / 酷狗音乐扫码登录、逐字歌词、桌面 HUD、灵动岛通知、无缝切歌、一起听，全部在游戏内完成，不需要挂后台播放器。
 
 [![Minecraft](https://img.shields.io/badge/Minecraft-1.8.9-green.svg)](#)
 [![Forge](https://img.shields.io/badge/Forge-11.15.1.2318-orange.svg)](#)
@@ -19,6 +19,7 @@
 
 - **三家官方源都能登录**：网易云 / QQ 音乐 / 酷狗音乐扫码登录，读自己的歌单、收藏与 VIP 音质；QQ 支持 QQ 与微信两种扫码。另有 GD 音乐台在线聚合源兜底。
 - **网易云实时同步**：歌单 / 收藏 / 点赞 / 网盘一键刷新，还能把游戏里听完的歌实时上报成网易云听歌记录（需明确同意）。
+- **网易云一起听**：在游戏里开房间，把分享链接、邀请码或二维码发给好友，房主的播放 / 暂停 / 拖动 / 切歌按官方协议同步给房间。
 - **逐字歌词优先**：AMLL 词库 → QQ QRC → 酷狗 KRC 逐条尝试，只有真的逐字才采用，普通歌词只做兜底。
 - **无缝切歌**：自动与手动切歌都有交叠淡入淡出，可选节拍对齐、去人声淡入、WSOLA 变速不变调。
 - **游戏内 HUD**：歌曲信息卡、桌面 OSD 歌词、灵动岛通知（7 种样式，可常驻显示 FPS / 延迟 / 时间 / 正在播放）。
@@ -42,6 +43,7 @@
 - 搜索歌曲与歌单；专辑封面墙（Coverflow）。
 - 聚合源解析失败时会自动换源重试，并在灵动岛上说明实际用的是哪个源。
 - **下一首播放队列**：任意歌曲右侧一键插队，可拖拽改排序，队列放完自动回到原歌单。
+- **一起听（仅网易云官方源）**：播放器右下角开房间，拿到分享链接 / 邀请码 / 二维码发给好友；房间成员一目了然，房主的播放、暂停、拖动进度与切歌都会同步上报。受官方接口限制，加入方需要点一次「同步一次」来对齐当前曲目与进度（上游没有给第三方拉取房主指令的端点）。
 - **无缝切歌（Automix）**：自动 / 手动切歌都有交叠淡入淡出，可选节拍对齐、低频交接、时长锁定，交叠 1.5~10 秒可调。
 - 全局快捷键控制上一曲 / 下一曲 / 音量 / 暂停，登录网易云后可选上报听歌记录。
 
@@ -137,7 +139,7 @@ gradlew.bat compileJava processResources --no-daemon
 - [Cadence](https://github.com/FPSMasterTeam/Cadence) — 网易云 / QQ 音乐 API
 - [qq-music-api](https://github.com/yakult-green-tea/qq-music-api) — QQ 音乐微信扫码登录、榜单与热搜的协议参考
 - [KuGouMusicApi](https://github.com/MakcRe/KuGouMusicApi) — 酷狗音乐接口协议参考
-- [api-enhanced](https://github.com/neteasecloudmusicapienhanced/api-enhanced) — 网易云音乐 API
+- [api-enhanced](https://github.com/neteasecloudmusicapienhanced/api-enhanced) — 网易云音乐 API，一起听的协议参考
 - [AMLL TTML DB](https://github.com/amll-dev/amll-ttml-db) — 人工校对的逐字歌词词库
 - [GD 音乐台](https://music.gdstudio.xyz/) — 在线聚合音源
 - [Material Design Icons](https://github.com/marella/material-design-icons)（Apache-2.0）— 设置界面图标

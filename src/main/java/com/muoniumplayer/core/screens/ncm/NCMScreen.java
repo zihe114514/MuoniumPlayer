@@ -93,6 +93,9 @@ public class NCMScreen extends ExtensionScreen implements SharedConstants, Share
     /** 二级音乐来源菜单：固定内容平台与 GD音乐台 聚合音源统一在此处管理。 */
     public MusicSourceOverlay musicSourceOverlay = null;
 
+    /** 一起听房间面板。与来源/账号面板同层，仅在网易云官方源下可以打开。 */
+    public ListenTogetherOverlay listenTogetherOverlay = null;
+
     /** 主题调色板：主题按钮右键打开的二级菜单，实时预览主题颜色配置项。 */
     public ThemePaletteOverlay themePaletteOverlay = null;
 
@@ -442,6 +445,21 @@ public class NCMScreen extends ExtensionScreen implements SharedConstants, Share
             }
             StencilClipManager.endClip();
         }
+        // 一起听房间面板与来源菜单同层：进行中的房间靠后台线程推进状态，
+        // 因此这里只负责布局与回收，不在渲染链路里做网络判断。
+        if (this.listenTogetherOverlay != null) {
+            StencilClipManager.beginClip(() -> roundedRect(basePanel.getX(), basePanel.getY(),
+                    basePanel.getWidth(), basePanel.getHeight(), cornerRadius, -1));
+            this.listenTogetherOverlay.setBounds(basePanel.getX(), basePanel.getY(),
+                    basePanel.getWidth(), basePanel.getHeight());
+            this.listenTogetherOverlay.setAlpha(alpha);
+            this.listenTogetherOverlay.renderWidget(mouseX, mouseY, dWheel);
+            if (this.listenTogetherOverlay.shouldClose()) {
+                this.listenTogetherOverlay.dispose();
+                this.listenTogetherOverlay = null;
+            }
+            StencilClipManager.endClip();
+        }
         // 主题调色板与其它二级菜单同层，阻止下方歌单与控件接收输入。
         if (this.themePaletteOverlay != null) {
             StencilClipManager.beginClip(() -> roundedRect(basePanel.getX(), basePanel.getY(),
@@ -707,6 +725,13 @@ public class NCMScreen extends ExtensionScreen implements SharedConstants, Share
         this.musicSourceOverlay.onInit();
     }
 
+    /** 打开一起听面板；重复打开时先回收上一次的实例，避免两层叠在一起。 */
+    public void openListenTogether() {
+        if (this.listenTogetherOverlay != null) this.listenTogetherOverlay.dispose();
+        this.listenTogetherOverlay = new ListenTogetherOverlay();
+        this.listenTogetherOverlay.onInit();
+    }
+
     @Override
     public void keyTyped(char typedChar, int keyCode) {
 
@@ -730,6 +755,17 @@ public class NCMScreen extends ExtensionScreen implements SharedConstants, Share
             }
             if (keyCode == Keyboard.KEY_ESCAPE) {
                 this.musicSourceOverlay.handleEscape();
+            }
+            return;
+        }
+        // 一起听的「加入房间」页有可编辑的邀请码输入框，必须先让控件树看到按键，
+        // 否则粘贴和输入都会像没反应。
+        if (this.listenTogetherOverlay != null) {
+            if (this.listenTogetherOverlay.onKeyTypedReceived(typedChar, keyCode)) {
+                return;
+            }
+            if (keyCode == Keyboard.KEY_ESCAPE) {
+                this.listenTogetherOverlay.handleEscape();
             }
             return;
         }
@@ -791,6 +827,7 @@ public class NCMScreen extends ExtensionScreen implements SharedConstants, Share
         return this.confirmationOverlay != null
                 || this.themePaletteOverlay != null
                 || this.musicSourceOverlay != null
+                || this.listenTogetherOverlay != null
                 || this.accountManagerOverlay != null
                 || this.addToPlaylistOverlay != null;
     }
@@ -815,6 +852,10 @@ public class NCMScreen extends ExtensionScreen implements SharedConstants, Share
 
         if (this.musicSourceOverlay != null) {
             this.musicSourceOverlay.onMouseClickReceived(mouseX, mouseY, mouseButton);
+            return;
+        }
+        if (this.listenTogetherOverlay != null) {
+            this.listenTogetherOverlay.onMouseClickReceived(mouseX, mouseY, mouseButton);
             return;
         }
         if (this.accountManagerOverlay != null) {
