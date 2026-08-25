@@ -70,6 +70,60 @@ final class FullscreenLyricStage {
         return Math.max(0.35, px / font.sizePx);
     }
 
+    // ==================== 可信的文字度量 ====================
+
+    /**
+     * 一个字形按当前倍率占的宽度；字形还没上传时给一个估算值而不是 0。
+     *
+     * <p>字形是<b>按需异步生成</b>的：{@code CFontRenderer.getCharWidth} 对还没上传的字形返回 0，
+     * 所以「刚换到这一行」的那一帧量出来的宽度会偏小甚至是 0。排版一旦按这个宽度定下来，字就会
+     * 冲出气泡；右对齐的那一侧更糟 —— 起点算成了气泡右边缘，整句直接铺到视口外被裁掉。估算值只
+     * 用于这一两帧的过渡，配合调用方的「字形没齐就重排」一起用。</p>
+     */
+    static double glyphWidth(CFontRenderer font, String grapheme, double scale, double targetPx) {
+        if (font == null || grapheme == null || grapheme.isEmpty()) return 0;
+        double measured = font.getStringWidthD(grapheme) * scale;
+        if (measured > .01) return measured;
+        return Math.max(1.0, targetPx) * estimateEmWidth(grapheme);
+    }
+
+    /** 字形没上传时按「全角 1 em / 半角 .55 em」估宽，够撑住一两帧的过渡。 */
+    private static double estimateEmWidth(String grapheme) {
+        int cp = grapheme.codePointAt(0);
+        if (cp == ' ' || cp == '\u3000' || Character.isWhitespace(cp)) return .30;
+        boolean wide = (cp >= 0x1100 && cp <= 0x115F)
+                || (cp >= 0x2E80 && cp <= 0xA4CF)
+                || (cp >= 0xAC00 && cp <= 0xD7A3)
+                || (cp >= 0xF900 && cp <= 0xFAFF)
+                || (cp >= 0xFE30 && cp <= 0xFE6F)
+                || (cp >= 0xFF00 && cp <= 0xFF60)
+                || (cp >= 0xFFE0 && cp <= 0xFFE6)
+                || cp > 0xFFFF;
+        return wide ? 1.0 : .55;
+    }
+
+    /** 这一段文字的字形是否都已上传（也就是量出来的宽度可不可信）。 */
+    static boolean glyphsReady(CFontRenderer font, String text) {
+        if (font == null) return false;
+        if (text == null || text.isEmpty()) return true;
+        return font.areGlyphsLoaded(text);
+    }
+
+    /**
+     * 一行文字占的高度。
+     *
+     * <p>{@code CFontRenderer.fontHeight} 在这个字号生成出第一个字形之前是负一，于是
+     * {@code getFontHeight()} 会算出负数（{@code (fontHeight - 8.5) * .5}）。字体梯子上有几档只被歌词页用到，
+     * 第一次用到时正好撞上这个状态，行高变负会让整块文字叠在一起、气泡塌成一条 —— 所以这里给一个
+     * 「字号本身」的下限兜底。</p>
+     */
+    static double lineHeightOf(CFontRenderer font, double scale) {
+        if (font == null) return 12.0;
+        double height = font.getFontHeight();
+        if (height < font.sizePx * .4) height = font.sizePx;
+        return height * scale;
+    }
+
     // ==================== 确定性随机 ====================
 
     /**

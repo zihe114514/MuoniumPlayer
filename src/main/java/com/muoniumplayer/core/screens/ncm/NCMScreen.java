@@ -879,6 +879,13 @@ public class NCMScreen extends ExtensionScreen implements SharedConstants, Share
             if (this.playQueuePanel != null && this.playQueuePanel.consumeClick(mouseX, mouseY, mouseButton)) {
                 return;
             }
+            // 搜索联想下拉遮住了侧栏的歌单条目与音乐来源卡片，同样必须前置消费。
+            // 光靠组件树内部「命中即 return」管不住：下面这三行是连续调用、没有早退，
+            // 而 onMouseClickReceived 返回 void，谁也拿不到「已经被吃掉」这个信息。
+            if (this.playlistsPanel != null
+                    && this.playlistsPanel.consumeSuggestionClick(mouseX, mouseY, mouseButton)) {
+                return;
+            }
             this.basePanel.onMouseClickReceived(mouseX, mouseY, mouseButton);
 
             if (this.currentPanel != null)

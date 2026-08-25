@@ -163,8 +163,18 @@ public class MusicWidget extends RoundedRectWidget {
         String gdSourceLabel = music.isGd() ? GdStudioMusicService.displayName(music.getGdPlatform()) : "";
         boolean showGdSource = music.isGd() && !gdSourceLabel.isEmpty();
         double gdBadgeWidth = showGdSource ? Math.max(26.0, gdSourceLabel.length() * 7.0 + 10.0) : 0.0;
+        // 音效标签：网易云 mark 位里的杜比全景声与纯伴奏。两个位一直有定义却没有任何 UI 用过。
+        // 刻意不展示 STEREO(8192)：那一位的确切含义在上游没有可靠说明，宁可不标也不要标错。
+        boolean dolbyAtmos = music.isDolbyAtmos();
+        boolean instrumental = music.isInstrumental();
+        double dolbyBadgeWidth = dolbyAtmos ? 34.0 : 0.0;
+        double instrumentalBadgeWidth = instrumental ? 27.0 : 0.0;
         double accessBadgeReserve = (vipRestricted ? 24.0 : 0.0) + (digitalAlbumTrack ? 28.0 : 0.0)
-                + (cloudSong ? 28.0 : 0.0) + (showHighestQuality ? 38.0 : 0.0) + gdBadgeWidth;
+                + (cloudSong ? 28.0 : 0.0) + (showHighestQuality ? 38.0 : 0.0) + gdBadgeWidth
+                + (dolbyAtmos ? dolbyBadgeWidth + 3.0 : 0.0)
+                + (instrumental ? instrumentalBadgeWidth + 3.0 : 0.0);
+        // 解灰标签是播放之后才知道结果的，所以它占的宽度必须逐帧算，否则标签出现时会压在长标题上。
+        final double[] unblockBadgeReserve = {0.0};
 
         String translatedNames = music.getTranslatedNames();
 
@@ -180,7 +190,7 @@ public class MusicWidget extends RoundedRectWidget {
                     // Reserve space for duration/actions and licensing badges so no badge can overlap a trimmed title.
                     lblMusicName.setMaxWidth(Math.max(1.0, this.getWidth() - (cover.getRelativeX() + cover.getWidth() + 4
                             + rightActionsReserve() + (musicDirty ? (dirtyIndicatorSize + 4) : 0)
-                            + accessBadgeReserve)));
+                            + accessBadgeReserve + unblockBadgeReserve[0])));
                 });
         lblMusicName.setClickable(false);
 
@@ -296,6 +306,52 @@ public class MusicWidget extends RoundedRectWidget {
             nextAccessBadgeX += gdBadgeWidth + 3.0;
         }
 
+        if (dolbyAtmos) {
+            final double dolbyBadgeOffset = nextAccessBadgeX;
+            RoundedRectWidget dolbyBadge = new RoundedRectWidget(0, 0, dolbyBadgeWidth, 10);
+            this.addChild(dolbyBadge);
+            dolbyBadge.setClickable(false);
+            dolbyBadge.setBeforeRenderCallback(() -> {
+                dolbyBadge.setRadius(2.5);
+                dolbyBadge.setColor(0x7B4DFF);
+                dolbyBadge.setAlpha(.92f);
+                dolbyBadge.setPosition(lblMusicName.getRelativeX() + lblMusicName.getWidth() + 3 + dolbyBadgeOffset,
+                        lblMusicName.getRelativeY() + lblMusicName.getHeight() * .5 - dolbyBadge.getHeight() * .5);
+            });
+            LabelWidget dolbyText = new LabelWidget("全景声", FontManager.pf12bold);
+            dolbyBadge.addChild(dolbyText);
+            dolbyText.setClickable(false);
+            dolbyText.setBeforeRenderCallback(() -> {
+                dolbyText.setColor(0xFFFFFF);
+                dolbyText.center();
+            });
+            nextAccessBadgeX += dolbyBadgeWidth + 3.0;
+        }
+
+        if (instrumental) {
+            final double instrumentalBadgeOffset = nextAccessBadgeX;
+            RoundedRectWidget instrumentalBadge = new RoundedRectWidget(0, 0, instrumentalBadgeWidth, 10);
+            this.addChild(instrumentalBadge);
+            instrumentalBadge.setClickable(false);
+            instrumentalBadge.setBeforeRenderCallback(() -> {
+                instrumentalBadge.setRadius(2.5);
+                instrumentalBadge.setColor(NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_HOVER));
+                instrumentalBadge.setAlpha(.95f);
+                instrumentalBadge.setPosition(
+                        lblMusicName.getRelativeX() + lblMusicName.getWidth() + 3 + instrumentalBadgeOffset,
+                        lblMusicName.getRelativeY() + lblMusicName.getHeight() * .5
+                                - instrumentalBadge.getHeight() * .5);
+            });
+            LabelWidget instrumentalText = new LabelWidget("伴奏", FontManager.pf12bold);
+            instrumentalBadge.addChild(instrumentalText);
+            instrumentalText.setClickable(false);
+            instrumentalText.setBeforeRenderCallback(() -> {
+                instrumentalText.setColor(NCMScreen.getColor(NCMScreen.ColorType.PRIMARY_TEXT));
+                instrumentalText.center();
+            });
+            nextAccessBadgeX += instrumentalBadgeWidth + 3.0;
+        }
+
         final double dirtyBadgeOffset = nextAccessBadgeX;
         if (musicDirty) {
             RoundedRectWidget dirtyIndicator = new RoundedRectWidget(0, 0, dirtyIndicatorSize, dirtyIndicatorSize);
@@ -318,6 +374,43 @@ public class MusicWidget extends RoundedRectWidget {
                 lblDirty.center();
             });
         }
+
+        // 解灰 / 灰色标签。它的文案在点播之后才确定，所以文本、宽度、显隐全部逐帧算。
+        final double unblockBadgeOffset = nextAccessBadgeX + (musicDirty ? dirtyIndicatorSize + 3.0 : 0.0);
+        RoundedRectWidget unblockBadge = new RoundedRectWidget(0, 0, 0, 10);
+        this.addChild(unblockBadge);
+        unblockBadge.setClickable(false);
+        LabelWidget unblockText = new LabelWidget(() -> unblockBadgeText(this.music), FontManager.pf12bold);
+        unblockBadge.addChild(unblockText);
+        unblockText.setClickable(false);
+        unblockText.setBeforeRenderCallback(() -> {
+            unblockText.setColor(this.music.getUnblockedSourceLabel().isEmpty()
+                    ? NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT) : 0xFFFFFF);
+            unblockText.center();
+        });
+        // 注意：这里不能用 unblockBadge.setHidden(true) 来隐藏自己 ——
+        // AbstractWidget.renderWidget 在 isHidden() 时直接 return，连 beforeRenderCallback 都不跑，
+        // 一旦自己把自己隐藏掉就再也没有机会恢复。改为收成 0 尺寸 + alpha 0，并只隐藏子文本。
+        unblockBadge.setBeforeRenderCallback(() -> {
+            String label = unblockBadgeText(this.music);
+            if (label.isEmpty()) {
+                unblockBadgeReserve[0] = 0.0;
+                unblockBadge.setBounds(0, 0);
+                unblockBadge.setAlpha(0f);
+                unblockText.setHidden(true);
+                return;
+            }
+            double width = Math.max(18.0, FontManager.pf12bold.getStringWidthD(label) + 8.0);
+            unblockBadgeReserve[0] = width + 3.0;
+            unblockText.setHidden(false);
+            unblockBadge.setBounds(width, 10);
+            unblockBadge.setRadius(2.5);
+            boolean unblocked = !this.music.getUnblockedSourceLabel().isEmpty();
+            unblockBadge.setColor(unblocked ? 0x2E9E5B : NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_HOVER));
+            unblockBadge.setAlpha(.95f);
+            unblockBadge.setPosition(lblMusicName.getRelativeX() + lblMusicName.getWidth() + 3 + unblockBadgeOffset,
+                    lblMusicName.getRelativeY() + lblMusicName.getHeight() * .5 - unblockBadge.getHeight() * .5);
+        });
 
         String albumName = music.getAlbum() == null || music.getAlbum().getName() == null
                 ? "未知专辑" : music.getAlbum().getName();
@@ -529,6 +622,20 @@ public class MusicWidget extends RoundedRectWidget {
         double slot = durationSlotWidth(this.music.getDuration() >= ONE_HOUR_MILLIS);
         int iconCount = this.music.isNetease() ? 3 : 1;
         return DURATION_RIGHT_MARGIN + slot + iconCount * (ACTION_GAP + ACTION_ICON_SIZE);
+    }
+
+    /**
+     * 解灰徽标的文案。
+     *
+     * <p>三态合成一枚徽标：已经用第三方源放出来 → 「解灰 · 源名」；官方链路取不到流且
+     * 「音乐是否可用」判定为不可用 → 「灰」；其余情况不显示。合成一枚而不是两枚，是因为
+     * 这两种状态互斥，分开占位会在长标题上白白吃掉一段宽度。</p>
+     */
+    private static String unblockBadgeText(Music music) {
+        if (music == null) return "";
+        String source = music.getUnblockedSourceLabel();
+        if (!source.isEmpty()) return "解灰 · " + source;
+        return music.isGreyDetected() ? "灰" : "";
     }
 
     private String formatDuration(long totalMillis) {

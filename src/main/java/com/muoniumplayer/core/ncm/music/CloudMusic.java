@@ -1111,6 +1111,14 @@ public class CloudMusic implements SharedConstants {
             this.startIdx = startIdx;
         }
 
+        /**
+         * 连续跳过的上限。整张歌单都是 VIP 专享时不能一路跳到底 —— 那等于把用户的歌单静默清空，
+         * 到了上限就停下让用户处理（换歌单，或关掉自动跳过）。
+         */
+        private static final int ROOM_SKIP_LIMIT = 8;
+
+        private int consecutiveRoomSkips;
+
         @Override
         public void run() {
             curIdx = startIdx;
@@ -1128,6 +1136,29 @@ public class CloudMusic implements SharedConstants {
                         resetArmState();
                     } else {
                         Music currentSong = playList.get(curIdx);
+
+                        // 一起听：房里有非会员时，VIP 专享曲对他们只有 30 秒试听，官方客户端会让整房
+                        // 一起切歌。这里在起播前就跳过，避免"房主接着放、房员早换歌了"的脱队。
+                        //
+                        // 刻意不走 playSong 返回 false 那条路：那条是"解析失败停下等用户操作"，
+                        // 而这里要的是继续往下放。推进也刻意用线性 curIdx++ 而不是 updateCurrentIndex()
+                        // —— 单曲循环下后者会原地打转，跳过就变成死循环。
+                        if (NeteaseListenTogetherService.shouldHostSkip(currentSong)) {
+                            consecutiveRoomSkips++;
+                            if (consecutiveRoomSkips > ROOM_SKIP_LIMIT || curIdx + 1 >= playList.size()) {
+                                DownloadDynamicIsland.showListenTogetherNothingPlayable(consecutiveRoomSkips);
+                                consecutiveRoomSkips = 0;
+                                awaitingPlaybackAction = true;
+                                playing.set(false);
+                                break;
+                            }
+                            DownloadDynamicIsland.showListenTogetherVipSkip(currentSong.getName(),
+                                    NeteaseListenTogetherService.skipReason());
+                            curIdx++;
+                            continue;
+                        }
+                        consecutiveRoomSkips = 0;
+
                         prepareForPlayback();
 
                         if (!playSong(currentSong)) {

@@ -18,7 +18,9 @@ import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -93,6 +95,23 @@ public final class NeteaseListenTogetherService {
     private static volatile String statusText = "";
     private static volatile boolean statusIsError;
     private static volatile List<Member> members = Collections.emptyList();
+
+    /**
+     * userId → vipType 缓存。会员状态不会在一局游戏里变来变去，所以查到就一直用，
+     * 不设过期；查失败的不入缓存，下一轮成员刷新会再试一次。
+     */
+    private static final Map<Long, Integer> VIP_TYPES = new ConcurrentHashMap<Long, Integer>();
+
+    /** 正在查的 userId，避免 5 秒一轮的成员轮询把同一个人反复查。 */
+    private static final Set<Long> VIP_LOOKUPS = Collections.newSetFromMap(new ConcurrentHashMap<Long, Boolean>());
+
+    /**
+     * 已确认是非会员的成员昵称（不含自己）。
+     *
+     * <p>只有<b>确认</b>才会进这个列表：查不到会员状态时它保持为空，于是跳过逻辑不生效 ——
+     * 宁可退回"各放各的"，也不要因为一次网络失败就把房主的歌跳掉。</p>
+     */
+    private static volatile List<String> nonVipNames = Collections.emptyList();
     private static volatile Thread worker;
     private static volatile long generation;
 
@@ -263,9 +282,11 @@ public final class NeteaseListenTogetherService {
             roomId = "";
             inviterId = 0L;
             members = Collections.emptyList();
+            nonVipNames = Collections.emptyList();
             statusText = "";
             statusIsError = false;
         }
+        // vipType 缓存留着：同一个人下次进房间不必再查一次，会员状态不会在一局里变。
         stopWorker();
         if (leavingRole == Role.NONE || leavingRoom.isEmpty()) return;
         MultiThreadingUtil.runAsync(() -> {
@@ -519,17 +540,22 @@ public final class NeteaseListenTogetherService {
             leave();
             return;
         }
-        List<Member> parsed = parseMembers(root);
-        if (!parsed.isEmpty()) members = Collections.unmodifiableList(parsed);
+        applyMembers(parseMembers(root));
         if (statusIsError) publish(token, defaultActiveStatus(), false);
     }
 
     private static void refreshMembersQuietly() {
         try {
-            List<Member> parsed = parseMembers(CloudMusicApi.listenTogetherStatus().toJsonObject());
-            if (!parsed.isEmpty()) members = Collections.unmodifiableList(parsed);
+            applyMembers(parseMembers(CloudMusicApi.listenTogetherStatus().toJsonObject()));
         } catch (Throwable ignored) {
         }
+    }
+
+    private static void applyMembers(List<Member> parsed) {
+        if (parsed == null || parsed.isEmpty()) return;
+        members = Collections.unmodifiableList(parsed);
+        recomputeNonVipMembers();
+        resolveMemberVipTypesAsync(parsed);
     }
 
     private static String defaultActiveStatus() {
@@ -634,6 +660,103 @@ public final class NeteaseListenTogetherService {
         }
     }
 
+    // ── 房间成员的会员状态 ──────────────────────────────────────────────────
+
+    /**
+     * 房间里是否有<b>已确认</b>的非会员成员（不含自己）。
+     *
+     * <p>查不到会员状态时返回 {@code false}，跳过逻辑随之失效 —— 这是有意的保守方向。</p>
+     */
+    public static boolean hasNonVipMember() {
+        return !nonVipNames.isEmpty();
+    }
+
+    /** 已确认的非会员昵称，给界面显示用。 */
+    public static List<String> getNonVipMemberNames() {
+        return nonVipNames;
+    }
+
+    /** 某个成员是否已确认为非会员。界面上给成员行挂标记用。 */
+    public static boolean isMemberNonVip(long userId) {
+        Integer vipType = VIP_TYPES.get(userId);
+        return vipType != null && vipType <= 0 && userId != selfUserId();
+    }
+
+    /**
+     * 房主是否应当在起播前跳过这首歌。
+     *
+     * <p>只针对 {@code fee == 1}（VIP 专享）：非会员拿到的是 30 秒试听，官方客户端在这种情况下
+     * 会让整房一起切歌，不跳过就会出现"房主接着放、房员早换歌了"的脱队。</p>
+     *
+     * <p>其余计费类型<b>一律不跳</b>：{@code fee == 8 / 16} 非会员能完整听（只是音质受限），
+     * {@code fee == 4} 是数字专辑 —— 买没买是按人算的、查不到，跳掉会误伤。</p>
+     */
+    public static boolean shouldHostSkip(Music song) {
+        if (song == null) return false;
+        if (phase != Phase.ACTIVE || role != Role.HOST) return false;
+        if (!ListenTogetherSettings.isSkipVipWhenRoomHasNonVip()) return false;
+        if (!song.isNetease() || song.getFee() != 1) return false;
+        return hasNonVipMember();
+    }
+
+    /** 跳过时给灵动岛用的一句原因。 */
+    public static String skipReason() {
+        List<String> names = nonVipNames;
+        if (names.isEmpty()) return "房内有成员无法完整播放";
+        String who = names.size() == 1 ? names.get(0) : names.get(0) + " 等 " + names.size() + " 人";
+        return who + " 不是会员，本曲只有试听";
+    }
+
+    private static long selfUserId() {
+        User profile = CloudMusic.profile;
+        return profile == null ? 0L : profile.getId();
+    }
+
+    private static void recomputeNonVipMembers() {
+        long self = selfUserId();
+        List<String> names = new ArrayList<String>();
+        for (Member member : members) {
+            if (member.userId <= 0L || member.userId == self) continue;
+            Integer vipType = VIP_TYPES.get(member.userId);
+            if (vipType == null || vipType > 0) continue;
+            names.add(member.nickname.isEmpty() ? "用户 " + member.userId : member.nickname);
+        }
+        nonVipNames = names.isEmpty() ? Collections.<String>emptyList() : Collections.unmodifiableList(names);
+    }
+
+    /**
+     * 补齐成员的 vipType。
+     *
+     * <p>房间快照只给 {@code userId / nickname / avatarUrl}，不带会员信息，所以按 userId 逐个查
+     * 公开的用户详情。每人只查一次（查成功就进缓存），查失败不入缓存、下一轮再试。</p>
+     */
+    private static void resolveMemberVipTypesAsync(List<Member> parsed) {
+        final long self = selfUserId();
+        for (Member member : parsed) {
+            final long userId = member.userId;
+            if (userId <= 0L || userId == self) continue;
+            if (VIP_TYPES.containsKey(userId)) continue;
+            if (!VIP_LOOKUPS.add(userId)) continue;
+            MultiThreadingUtil.runAsync(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        JsonObject detail = CloudMusicApi.userDetail(userId).toJsonObject();
+                        JsonElement vipType = deepFind(detail, "vipType");
+                        if (vipType != null && vipType.isJsonPrimitive()) {
+                            VIP_TYPES.put(userId, (int) number(vipType));
+                            recomputeNonVipMembers();
+                        }
+                    } catch (Throwable ignored) {
+                        // 查不到就当"不知道"：跳过逻辑不生效，回到各放各的。
+                    } finally {
+                        VIP_LOOKUPS.remove(userId);
+                    }
+                }
+            });
+        }
+    }
+
     private static List<Member> parseMembers(JsonObject root) {
         List<Member> result = new ArrayList<Member>();
         JsonElement users = deepFind(root, "roomUsers");
@@ -647,6 +770,11 @@ public final class NeteaseListenTogetherService {
             String nickname = text(firstOf(userObject, "nickname", "nickName", "name"));
             String avatar = text(firstOf(userObject, "avatarUrl", "avatar", "picUrl"));
             if (userId <= 0L && nickname.isEmpty()) continue;
+            // 快照里顺手带了会员信息就直接用，省掉一次 user/detail。上游没文档，所以不能指望它在。
+            JsonElement vipType = firstOf(userObject, "vipType", "vipRights");
+            if (userId > 0L && vipType != null && vipType.isJsonPrimitive()) {
+                VIP_TYPES.put(userId, (int) number(vipType));
+            }
             result.add(new Member(userId, nickname, avatar));
         }
         return result;

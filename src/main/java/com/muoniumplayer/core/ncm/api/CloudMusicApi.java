@@ -25,6 +25,19 @@ import java.util.stream.Collectors;
 @UtilityClass
 public class CloudMusicApi {
 
+    /**
+     * 用户主页详情。这里只用它读别人的 {@code profile.vipType}。
+     *
+     * <p>一起听要判断"房里有没有人是非会员"，而房间快照只给 {@code userId / nickname / avatarUrl}，
+     * 不带会员信息。与其去赌某个未公开字段，不如按 userId 逐个查公开的用户详情 —— 这条是
+     * 确定可用的，第三方客户端显示 VIP 标记走的就是它。</p>
+     */
+    public RequestUtil.RequestAnswer userDetail(long uid) {
+        Map<String, Object> data = new HashMap<>();
+        return RequestUtil.createRequest("/api/v1/user/detail/" + uid, data,
+                OptionsUtil.createOptions("weapi"));
+    }
+
     // ── 一起听（listen together）─────────────────────────────────────────────
     //
     // 端点与参数按 api-enhanced 的 module/listentogether_*.js 一一对应，走默认 eapi
@@ -285,6 +298,21 @@ public class CloudMusicApi {
         return RequestUtil.createRequest("/api/radio/trash/add", data, OptionsUtil.createOptions("weapi"));
     }
 
+    /**
+     * 搜索建议（联想词）。严格对应 api-enhanced 的 {@code module/search_suggest.js}：
+     * 端点 {@code /api/search/suggest/web}（或 {@code .../keyword}），weapi，唯一参数是 {@code s}。
+     *
+     * @param mobile {@code true} 走 {@code keyword} 变体（返回 {@code result.allMatch[].keyword} 纯联想词），
+     *               {@code false} 走默认的 {@code web} 变体（返回按 {@code result.order} 分组的
+     *               歌曲 / 歌手 / 专辑 / 歌单）
+     */
+    public RequestUtil.RequestAnswer searchSuggest(String keywords, boolean mobile) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("s", keywords == null ? "" : keywords);
+        return RequestUtil.createRequest("/api/search/suggest/" + (mobile ? "keyword" : "web"), data,
+                OptionsUtil.createOptions("weapi"));
+    }
+
     public RequestUtil.RequestAnswer searchHotDetail() {
         return RequestUtil.createRequest("/api/hotsearchlist/get", new HashMap<>(), OptionsUtil.createOptions("weapi"));
     }
@@ -470,6 +498,47 @@ public class CloudMusicApi {
      */
     public RequestUtil.RequestAnswer songUrlStandardMp3(long id) {
         return songUrlV1(id, "standard", "mp3");
+    }
+
+    /**
+     * 「音乐是否可用」。严格对应 api-enhanced 的 {@code module/check_music.js}。
+     *
+     * <p>上游<b>没有</b>专用端点：它就是把取流端点 {@code /api/song/enhance/player/url}（weapi，
+     * 参数只有 {@code ids} 与 {@code br}）请一遍，再看返回体里<b>这一首</b>自己的 {@code code}。
+     * 所以判定条件是 {@code body.code == 200 && body.data[0].code == 200}，
+     * 见 {@link #isMusicPlayable(long)}。</p>
+     *
+     * @param br 码率，默认 999000（与参考实现一致）；传 &lt;= 0 时按默认值
+     */
+    public RequestUtil.RequestAnswer checkMusic(long id, int br) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("ids", "[" + id + "]");
+        data.put("br", br <= 0 ? 999000 : br);
+        return RequestUtil.createRequest("/api/song/enhance/player/url", data,
+                OptionsUtil.createOptions("weapi"));
+    }
+
+    /**
+     * 这一首在当前账号下能不能放。
+     *
+     * <p>请求失败、返回体不合规一律当作「不可用」——调用方只在官方链路已经取不到流之后才问它，
+     * 此时把网络故障和真正的灰色歌都归为「拿不到官方流」不会带来误判损失。</p>
+     */
+    public boolean isMusicPlayable(long id) {
+        try {
+            RequestUtil.RequestAnswer answer = checkMusic(id, 999000);
+            if (answer == null || answer.getStatus() != 200) return false;
+            JsonObject root = answer.toJsonObject();
+            if (root == null || !root.has("code") || root.get("code").isJsonNull()) return false;
+            if (root.get("code").getAsInt() != 200) return false;
+            if (!root.has("data") || !root.get("data").isJsonArray()) return false;
+            JsonArray data = root.getAsJsonArray("data");
+            if (data.size() == 0 || !data.get(0).isJsonObject()) return false;
+            JsonObject first = data.get(0).getAsJsonObject();
+            return first.has("code") && !first.get("code").isJsonNull() && first.get("code").getAsInt() == 200;
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     public RequestUtil.RequestAnswer like(long id, boolean like) {

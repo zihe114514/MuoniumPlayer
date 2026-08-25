@@ -176,6 +176,43 @@ final class CadenzaLyricRenderer implements FullscreenLyricRenderer,
         return base * (1.0 + BREATH_STRENGTH) * (1.0 + word);
     }
 
+    /**
+     * 字词碰撞盒在文本之外撑开的留白（横向/纵向都是<b>单侧</b>的量）。
+     *
+     * <p>两块互不重叠时的实际净空是这个值的两倍。比例项按字高走，让大字有相称的呼吸感；
+     * 绝对下限是给<b>发光</b>留的 —— 发光靠环形偏移多画几遍做出来，半径是绝对像素、与字号无关
+     * （最大约 6px，见 {@code VIEW_MARGIN_MIN} 那段）。只按比例留白时，小字号下 {@code .22 × 14 ≈ 3px}
+     * 的净空压根盖不住 6px 的光晕，隔壁块的光直接糊到这块字上 —— 看起来就是"字叠在一起"。</p>
+     *
+     * <p>纵向比例比横向小：字高本身已经包含行距，字形墨迹只占其中一部分，纵向的视觉净空天生比
+     * 名义值大；横向没有这层富余。</p>
+     */
+    private static final double BOX_PAD_X_FACTOR = .30;
+    private static final double BOX_PAD_Y_FACTOR = .22;
+    private static final double BOX_PAD_MIN = 5.0;
+
+    /** 见 {@link #BOX_PAD_X_FACTOR}。传字高，横向单侧留白。 */
+    private static double boxPadX(double height) {
+        return Math.max(height * BOX_PAD_X_FACTOR, BOX_PAD_MIN);
+    }
+
+    /** 见 {@link #BOX_PAD_X_FACTOR}。传字高，纵向单侧留白。 */
+    private static double boxPadY(double height) {
+        return Math.max(height * BOX_PAD_Y_FACTOR, BOX_PAD_MIN);
+    }
+
+    /**
+     * 相邻两块在锚点场里的间距。
+     *
+     * <p>必须覆盖<b>两侧</b>的盒子留白：只算一侧的话，锚点场本身就是互相重叠的，全靠
+     * {@link #place} 的螺旋一个个把它们推开 —— 推不开就是叠字。锚点场自己不重叠，螺旋才只是
+     * "微调"而不是"抢救"。</p>
+     */
+    private static double blockGap(CFontRenderer font) {
+        double height = font.getHeight();
+        return font.getStringWidthD(" ") * .6 + boxPadX(height) * 2.0;
+    }
+
     /** 进出场动画种类。 */
     private enum Anim {
         FADE, JUMP, DROP, SPIN, BOOMERANG, SLIDE, ZOOM, SWIRL
@@ -561,7 +598,7 @@ final class CadenzaLyricRenderer implements FullscreenLyricRenderer,
             CFontRenderer heroFont = tiers[t][0];
             CFontRenderer normalFont = tiers[t][1];
             // 和 placeAll() 完全相同的块间距，否则这里算出来的横排宽度和真正排布时的不是一回事。
-            double gap = normalFont.getStringWidthD(" ") * .6 + normalFont.getHeight() * .18;
+            double gap = blockGap(normalFont);
             double widestBox = 0;
             double tallestBox = 0;
             double area = 0;
@@ -574,9 +611,9 @@ final class CadenzaLyricRenderer implements FullscreenLyricRenderer,
                 // 和 place() 完全相同的盒子尺寸，包括 hero 的放大余量。只比较文本宽度的话，
                 // 一句 20 个字的长句会被判成「放得下」，随后夹取时又发现盒子比舞台还宽。
                 double reserve = boxReserve(hero);
-                widestBox = Math.max(widestBox, (width * .5 + height * .18) * reserve * 2);
-                tallestBox = Math.max(tallestBox, (height * .5 + height * .10) * reserve * 2);
-                area += (width + height * .36) * height * 1.3;
+                widestBox = Math.max(widestBox, (width * .5 + boxPadX(height)) * reserve * 2);
+                tallestBox = Math.max(tallestBox, (height * .5 + boxPadY(height)) * reserve * 2);
+                area += (width + boxPadX(height) * 2) * height * 1.3;
                 rowWidth += width + gap;
             }
             rowWidth = Math.max(0.0, rowWidth - gap);
@@ -655,8 +692,8 @@ final class CadenzaLyricRenderer implements FullscreenLyricRenderer,
         for (int i = start; i < ladder.length; i++) {
             CFontRenderer candidate = ladder[i];
             double height = candidate.getHeight();
-            double boxWidth = (candidate.getStringWidthD(text) * .5 + height * .18) * 2.0 * reserve;
-            double boxHeight = (height * .5 + height * .10) * 2.0 * reserve;
+            double boxWidth = (candidate.getStringWidthD(text) * .5 + boxPadX(height)) * 2.0 * reserve;
+            double boxHeight = (height * .5 + boxPadY(height)) * 2.0 * reserve;
             if (boxWidth <= stageWidth && boxHeight <= stageHeight) return candidate;
         }
         return ladder[ladder.length - 1];
@@ -681,7 +718,7 @@ final class CadenzaLyricRenderer implements FullscreenLyricRenderer,
      */
     private double placeAll(List<Token> raw, int heroIndex, CFontRenderer[] tier,
                             double stageWidth, double stageHeight) {
-        double gap = tier[1].getStringWidthD(" ") * .6 + tier[1].getHeight() * .18;
+        double gap = blockGap(tier[1]);
         double rowHeight = tier[0].getHeight() * 1.25;
 
         assignAnchors(raw, gap, stageWidth);
@@ -774,18 +811,22 @@ final class CadenzaLyricRenderer implements FullscreenLyricRenderer,
         }
         rows++;
 
-        double spacing = 1.14;
+        // 行带高度必须把纵向留白算进去（上下各一份），否则锚点场里上下相邻的两行天生就是重叠的
+        // ——原来是固定乘 1.14，只有 .14 倍字高的净空，小字号下连发光都盖不住。
+        double[] band = new double[rows];
         double totalHeight = 0;
-        for (int r = 0; r < rows; r++) totalHeight += rowHeight[r] * spacing;
+        for (int r = 0; r < rows; r++) {
+            band[r] = rowHeight[r] + boxPadY(rowHeight[r]) * 2.0;
+            totalHeight += band[r];
+        }
 
         double[] cursor = new double[rows];
         double[] centreY = new double[rows];
         double y = -totalHeight * .5;
         for (int r = 0; r < rows; r++) {
-            double band = rowHeight[r] * spacing;
-            centreY[r] = y + band * .5;
+            centreY[r] = y + band[r] * .5;
             cursor[r] = -rowWidth[r] * .5;
-            y += band;
+            y += band[r];
         }
 
         for (int i = 0; i < count; i++) {
@@ -820,8 +861,8 @@ final class CadenzaLyricRenderer implements FullscreenLyricRenderer,
         for (int i = 0; i < count; i++) {
             Token token = raw.get(i);
             double reserve = boxReserve(token.hero);
-            area[i] = (token.width * .5 + token.height * .18) * reserve
-                    * (token.height * .5 + token.height * .10) * reserve;
+            area[i] = (token.width * .5 + boxPadX(token.height)) * reserve
+                    * (token.height * .5 + boxPadY(token.height)) * reserve;
         }
         for (int slot = 1; slot < count; slot++) {
             int best = -1;
@@ -849,8 +890,8 @@ final class CadenzaLyricRenderer implements FullscreenLyricRenderer,
      */
     private void place(Token token, double anchorX, double anchorY, List<double[]> placed,
                        double stageWidth, double stageHeight) {
-        double halfWidth = token.width * .5 + token.height * .18;
-        double halfHeight = token.height * .5 + token.height * .10;
+        double halfWidth = token.width * .5 + boxPadX(token.height);
+        double halfHeight = token.height * .5 + boxPadY(token.height);
         double scaleUp = boxReserve(token.hero);
         double boxWidth = halfWidth * scaleUp;
         double boxHeight = halfHeight * scaleUp;

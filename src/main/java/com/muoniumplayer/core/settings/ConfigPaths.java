@@ -34,6 +34,22 @@ public final class ConfigPaths {
      */
     public static final File KUGOU_AUTH = new File("config", "muonium/kugou_auth.json");
 
+    /**
+     * 一起听的行为开关。
+     *
+     * <p>单独一个文件而不是塞进 {@link #PLAYER}：这些开关只在房间里有意义，读失败的代价是
+     * 回到默认行为，不该有机会影响播放器主配置的读写。</p>
+     */
+    public static final File LISTEN_TOGETHER = new File("config", "muonium/listen_together.json");
+
+    /**
+     * 网易云灰色歌曲解灰的行为开关。
+     *
+     * <p>与 {@link #LISTEN_TOGETHER} 同理单独一个文件：这些开关只在「官方链路已经取不到流」
+     * 之后才生效，读失败的代价仅是回到默认行为，不该有机会影响播放器主配置的读写。</p>
+     */
+    public static final File NETEASE_UNBLOCK = new File("config", "muonium/netease_unblock.json");
+
     /** Automix (seamless track handover) preferences. */
     public static final File AUTOMIX = new File("config", "muonium/automix.json");
 

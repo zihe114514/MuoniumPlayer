@@ -112,6 +112,22 @@ final class CappellaLyricRenderer extends AbstractStageLyricRenderer {
     private double laidOutWidth = -1;
     private double laidOutHeight = -1;
 
+    /**
+     * 这一次排版里有文字的字形还没上传，量出来的宽度不可信。
+     *
+     * <p>见 {@link FullscreenLyricStage#glyphWidth}：字形是按需异步生成的，「刚换到这一行」的那一帧
+     * 常常量不到宽度。排版只在换行/换视口时重算，所以这一帧的偏差会被整行沿用下去 —— 表现就是
+     * 「字冲出气泡」和「右侧那句整条铺到视口外看不见」。标记上之后由 {@link #draw} 逐帧重排，
+     * 字形补齐了自然停下。</p>
+     */
+    private boolean metricsPending;
+
+    /** 因为字形没齐而重排了多少次。封顶是防御：万一某个字符永远生成不出来，别逐帧重排到底。 */
+    private int metricsRetries;
+
+    /** 字形没齐时最多重排这么多帧（60 fps 下约 .7 秒），之后接受当前排版。 */
+    private static final int METRICS_MAX_RETRIES = 40;
+
     private double cameraY;
     private boolean cameraReady;
     private LyricLine anchorLine;
@@ -136,6 +152,8 @@ final class CappellaLyricRenderer extends AbstractStageLyricRenderer {
         cameraReady = false;
         anchorLine = null;
         anchorY = 0;
+        metricsPending = false;
+        metricsRetries = 0;
     }
 
     protected void draw(double left, double top, double width, double height,
@@ -143,7 +161,17 @@ final class CappellaLyricRenderer extends AbstractStageLyricRenderer {
         boolean viewportChanged = tuningDirty
                 || Math.abs(width - laidOutWidth) >= 2.0
                 || Math.abs(height - laidOutHeight) >= 2.0;
-        if (currentLine != laidOutCenter || viewportChanged) {
+        boolean relayout = currentLine != laidOutCenter || viewportChanged;
+        // 字形没上传完就重排下一帧：这一帧照常绘制会把字形逐步上传（drawString 会触发生成），
+        // 下一帧量出来的宽度才是真的。项目里 LyricLine.computeHeight 与 ConfirmationOverlay
+        // 的换行也是同一个套路。
+        if (!relayout && metricsPending && metricsRetries < METRICS_MAX_RETRIES) {
+            relayout = true;
+            metricsRetries++;
+        } else if (relayout) {
+            metricsRetries = 0;
+        }
+        if (relayout) {
             double previousAnchorY = anchorY;
             LyricLine previousAnchor = anchorLine;
             rebuild(currentLine, positionMs, width, height);
@@ -222,8 +250,10 @@ final class CappellaLyricRenderer extends AbstractStageLyricRenderer {
             double padY = fontPx * .38;
             for (int r = 0; r < message.rows.size(); r++) {
                 Row row = message.rows.get(r);
+                // 右对齐取 max 是防御：row.width 万一比气泡内容区还宽（字形补齐前的估算偏小、
+                // 或者单个字形本身就比内容区宽），起点会算到气泡左边缘外面去，整句往视口外冲。
                 double rowX = message.right
-                        ? x + message.width - padX - row.width
+                        ? Math.max(x + padX, x + message.width - padX - row.width)
                         : x + padX;
                 double rowY = screenY + padY + row.y;
                 FullscreenLyricStage.pushMatrix();
@@ -417,6 +447,11 @@ final class CappellaLyricRenderer extends AbstractStageLyricRenderer {
         layout(lines, targetPx, viewWidth, viewHeight);
     }
 
+    /** 一个字形的宽度（已乘倍率）；字形还没上传时用估算值兜底。 */
+    private double glyphWidth(String grapheme) {
+        return FullscreenLyricStage.glyphWidth(font, grapheme, fontScale, fontPx);
+    }
+
     /** @return true 表示这一档字号下每条气泡都装得进视口 */
     private boolean layout(List<LyricLine> lines, double targetPx,
                            double viewWidth, double viewHeight) {
@@ -426,6 +461,8 @@ final class CappellaLyricRenderer extends AbstractStageLyricRenderer {
         fontPx = targetPx;
         avatarSize = Math.max(12.0, fontPx * 1.55);
         refreshAvatarPick();
+        // 这一档字号还没生成过任何字形时 fontHeight 是负一，行高只能先用兜底值，得等下一帧重排。
+        metricsPending = font.getFontHeight() < font.sizePx * .4;
 
         double emojiChance = HudConfig.cappellaEmojiEnabled
                 ? FullscreenLyricStage.clamp(HudConfig.cappellaEmojiChance, 0.0, .45) : 0.0;
@@ -442,7 +479,7 @@ final class CappellaLyricRenderer extends AbstractStageLyricRenderer {
                 Math.max(fontPx * 4, viewWidth * bubbleRatio - avatarSize - fontPx));
         double padX = fontPx * .55;
         double padY = fontPx * .38;
-        double lineHeight = font.getFontHeight() * fontScale * 1.14;
+        double lineHeight = FullscreenLyricStage.lineHeightOf(font, fontScale) * 1.14;
         double gapBetween = fontPx * .55;
 
         double y = 0;
@@ -455,6 +492,7 @@ final class CappellaLyricRenderer extends AbstractStageLyricRenderer {
             LyricLine line = lines.get(i);
             String text = line.lyric == null ? "" : line.lyric.trim();
             if (text.isEmpty()) continue;
+            if (!FullscreenLyricStage.glyphsReady(font, text)) metricsPending = true;
 
             if (previousEnd != Long.MIN_VALUE && line.timestamp - previousEnd >= INTERLUDE_GAP_MS) {
                 Message interlude = new Message();
@@ -465,7 +503,15 @@ final class CappellaLyricRenderer extends AbstractStageLyricRenderer {
                 Row row = new Row();
                 row.chars = FullscreenLyricStage.graphemes(INTERLUDE_TEXT);
                 row.graphemeStart = 0;
+                // 间奏那条是整串一次画出来的（不走逐字），所以必须整串量：整串量才带上字距调整。
+                // 只有量不到（字形还没上传）时才退回逐字估算。
                 row.width = font.getStringWidthD(INTERLUDE_TEXT) * fontScale;
+                if (row.width <= .01) {
+                    for (int c = 0; c < row.chars.size(); c++) {
+                        row.width += glyphWidth(row.chars.get(c));
+                    }
+                    metricsPending = true;
+                }
                 row.y = 0;
                 interlude.rows.add(row);
                 interlude.width = row.width + padX * 2;
@@ -524,7 +570,7 @@ final class CappellaLyricRenderer extends AbstractStageLyricRenderer {
                 int take = 0;
                 double rowWidth = 0;
                 while (cursor + take < chars.size()) {
-                    double advance = font.getStringWidthD(chars.get(cursor + take)) * fontScale;
+                    double advance = glyphWidth(chars.get(cursor + take));
                     if (take > 0 && rowWidth + advance > contentWidth) break;
                     rowWidth += advance;
                     take++;

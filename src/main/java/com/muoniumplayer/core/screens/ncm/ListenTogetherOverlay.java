@@ -2,6 +2,7 @@ package com.muoniumplayer.core.screens.ncm;
 
 import com.muoniumplayer.core.management.FontManager;
 import com.muoniumplayer.core.ncm.music.CadenceMusicService;
+import com.muoniumplayer.core.ncm.music.ListenTogetherSettings;
 import com.muoniumplayer.core.ncm.music.MusicPlatform;
 import com.muoniumplayer.core.ncm.music.NeteaseListenTogetherService;
 import com.muoniumplayer.core.ncm.music.QRCodeGenerator;
@@ -441,7 +442,22 @@ public final class ListenTogetherOverlay extends NCMPanel {
             membersLabel.setPosition(16, 232);
         });
 
+        addSkipToggle(host);
+
         for (int row = 0; row < MEMBER_ROWS; row++) addMemberRow(host, row);
+
+        // 房里有非会员时才出现的一行说明。VIP 专享曲对他们只有 30 秒试听，
+        // 这里把"为什么歌会自己跳掉"提前讲清楚，而不是等它跳了才在灵动岛解释。
+        LabelWidget vipHint = new LabelWidget(this::vipHintText, FontManager.pf12);
+        host.addChild(vipHint);
+        vipHint.setClickable(false);
+        vipHint.setBeforeRenderCallback(() -> {
+            vipHint.setColor(WARN_COLOR);
+            vipHint.setMaxWidth(Math.max(1, host.getWidth() - 32));
+            vipHint.setWidthLimitType(LabelWidget.WidthLimitType.TRIM_TO_WIDTH);
+            vipHint.setPosition(16, 348);
+            vipHint.setAlpha(NeteaseListenTogetherService.hasNonVipMember() ? host.getAlpha() : 0f);
+        });
 
         LabelWidget empty = new LabelWidget("还没有人加入，把链接或邀请码发给好友吧。", FontManager.pf12);
         host.addChild(empty);
@@ -453,6 +469,48 @@ public final class ListenTogetherOverlay extends NCMPanel {
         });
 
         addFooterButtons(host);
+    }
+
+    /**
+     * 自动跳过开关，右对齐挂在「房间成员」那一行上。
+     *
+     * <p>刻意不占独立一行：房间页纵向已经排满，而这个开关平时不需要看，只在"歌怎么自己跳了"
+     * 的时候要能立刻找到。</p>
+     */
+    private void addSkipToggle(final Panel host) {
+        final double[] hover = new double[1];
+        RoundedButtonWidget toggle = new RoundedButtonWidget(
+                () -> ListenTogetherSettings.isSkipVipWhenRoomHasNonVip()
+                        ? "自动跳过 VIP 专享 · 开" : "自动跳过 VIP 专享 · 关",
+                FontManager.pf10bold);
+        host.addChild(toggle);
+        toggle.setRadius(6);
+        toggle.setOnClickCallback((x, y, button) -> {
+            if (button != 0) return false;
+            ListenTogetherSettings.setSkipVipWhenRoomHasNonVip(
+                    !ListenTogetherSettings.isSkipVipWhenRoomHasNonVip());
+            return true;
+        });
+        toggle.setBeforeRenderCallback(() -> {
+            boolean on = ListenTogetherSettings.isSkipVipWhenRoomHasNonVip();
+            hover[0] = Interpolations.interpolate(hover[0], toggle.isHovering() ? 1.0 : 0.0, .22f);
+            toggle.setBounds(126, 20);
+            toggle.setPosition(host.getWidth() - 16 - 126, 228);
+            int base = on ? NCMScreen.getColor(NCMScreen.ColorType.ACCENT)
+                    : NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_BACKGROUND);
+            toggle.setColor(mix(base, on ? 0xFFFFFF : NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_HOVER),
+                    on ? hover[0] * .14 : hover[0]));
+            toggle.setTextColor(on ? 0xFFFFFF : NCMScreen.getColor(NCMScreen.ColorType.PRIMARY_TEXT));
+        });
+    }
+
+    private String vipHintText() {
+        List<String> names = NeteaseListenTogetherService.getNonVipMemberNames();
+        if (names.isEmpty()) return "";
+        String who = names.size() == 1 ? names.get(0) : names.get(0) + " 等 " + names.size() + " 人";
+        return ListenTogetherSettings.isSkipVipWhenRoomHasNonVip()
+                ? who + " 不是会员：VIP 专享曲只有 30 秒试听，将自动跳过以保持同步"
+                : who + " 不是会员：VIP 专享曲他们只能听 30 秒，房间会在那时脱队";
     }
 
     private String shortRoom(String roomId) {
@@ -560,10 +618,39 @@ public final class ListenTogetherOverlay extends NCMPanel {
                     ? "用户 " + member.userId : member.nickname;
             name.setLabel(nickname);
             name.setColor(NCMScreen.getColor(NCMScreen.ColorType.PRIMARY_TEXT));
-            name.setMaxWidth(Math.max(1, host.getWidth() - 60));
+            // 给右侧的「无 VIP」标记留位置，否则长昵称会压到标记底下。
+            name.setMaxWidth(Math.max(1, host.getWidth() - 60 - 52));
             name.setWidthLimitType(LabelWidget.WidthLimitType.TRIM_TO_WIDTH);
             name.setPosition(40, y + 5 + (1.0 - reveal[0]) * 6.0);
             name.setAlpha(host.getAlpha() * (float) reveal[0]);
+        });
+
+        // 「无 VIP」标记右对齐：和列表里其它行的右侧控件共用一条竖线，长短昵称都不会让它左右跳。
+        final RoundedRectWidget chip = new RoundedRectWidget();
+        host.addChild(chip);
+        chip.setClickable(false);
+        chip.setRadius(5);
+        chip.setBeforeRenderCallback(() -> {
+            List<NeteaseListenTogetherService.Member> members = NeteaseListenTogetherService.getMembers();
+            boolean flag = row < members.size()
+                    && NeteaseListenTogetherService.isMemberNonVip(members.get(row).userId);
+            if (!flag) {
+                chip.setAlpha(0f);
+                return;
+            }
+            chip.setBounds(44, 16);
+            chip.setPosition(host.getWidth() - 16 - 44, y + 2 + (1.0 - reveal[0]) * 6.0);
+            chip.setColor(mix(NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_BACKGROUND), WARN_COLOR, .3));
+            chip.setAlpha(host.getAlpha() * (float) reveal[0]);
+        });
+
+        final LabelWidget chipText = new LabelWidget("无 VIP", FontManager.pf10bold);
+        chip.addChild(chipText);
+        chipText.setClickable(false);
+        chipText.setBeforeRenderCallback(() -> {
+            chipText.setColor(0xFFFFFF);
+            chipText.setPosition(chip.getWidth() * .5 - chipText.getWidth() * .5,
+                    Math.max(1.0, (chip.getHeight() - chipText.getHeight()) * .5));
         });
     }
 

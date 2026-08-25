@@ -131,6 +131,16 @@ public class Music {
     private transient String kugouAlbumAudioId = "";
     /** 带 {@code {size}} 占位符的酷狗封面模板。 */
     private transient String kugouCoverTemplate = "";
+    /**
+     * 解灰状态。两个字段都是 {@code transient}：它们描述的是「这一次点播发生了什么」，
+     * 不该进歌单落盘，也不该参与 Lombok 的相等性判断。
+     *
+     * <p>{@code greyDetected} 由 api-enhanced 的「音乐是否可用」判定（见
+     * {@code CloudMusicApi#isMusicPlayable}），只在官方链路已经取不到流之后问一次；
+     * {@code unblockedSourceLabel} 非空表示这一首现在放的是第三方源的流。</p>
+     */
+    private transient volatile boolean greyDetected;
+    private transient volatile String unblockedSourceLabel = "";
     private transient boolean vip;
     /** True only when the NetEase payload explicitly marks this track as a cloud-drive track. */
     private transient boolean cloudSong;
@@ -597,7 +607,8 @@ public class Music {
                     return resolveWithBuiltInNeteaseApi();
                 }
             }, "built-in NetEase API");
-            return result;
+            if (result != null) return result;
+            return resolveNeteaseUnblock();
         }
 
         Tuple<String, String> result = resolveWithTimeout(new Callable<Tuple<String, String>>() {
@@ -608,7 +619,53 @@ public class Music {
         }, "built-in NetEase API");
         if (result != null) return result;
         result = resolveCadenceWithStandardFallback();
-        return result;
+        if (result != null) return result;
+        return resolveNeteaseUnblock();
+    }
+
+    /**
+     * 最后一道网易云兜底：官方两条链路都没有流之后，按 UnblockNeteaseMusic 的流程去第三方源
+     * 重新匹配一条可播链接。
+     *
+     * <p>刻意放在整条链路的<b>最后</b>，而且只对当前这一首生效 —— 主动对整张歌单探测可用性会
+     * 瞬间打爆网易云与 GD 音乐台的额度。解灰失败时仍然返回 {@code null}，交回既有的
+     * 「没有可用音频源 → 停下等用户操作」流程，不会自动跳下一曲。</p>
+     */
+    private Tuple<String, String> resolveNeteaseUnblock() {
+        if (!isNetease()) return null;
+        this.unblockedSourceLabel = "";
+        if (!com.muoniumplayer.core.ncm.music.NeteaseUnblockSettings.isEnabled()) return null;
+
+        // 先问一次「音乐是否可用」，把真正的灰色歌和一次网络抖动区分开。判定只影响歌曲行上的
+        // 「灰」标，不影响是否尝试解灰 —— 官方流已经拿不到了，无论原因都该去找替代源。
+        this.greyDetected = !com.muoniumplayer.core.ncm.music.NeteaseGreyUnblocker.isPlayableOnOfficial(this);
+
+        final Quality requestedQuality = CloudMusic.quality == null ? Quality.LOSSLESS : CloudMusic.quality;
+        return resolveWithTimeout(new Callable<Tuple<String, String>>() {
+            @Override
+            public Tuple<String, String> call() {
+                com.muoniumplayer.core.ncm.music.NeteaseGreyUnblocker.Result unblocked =
+                        com.muoniumplayer.core.ncm.music.NeteaseGreyUnblocker.unblock(Music.this, requestedQuality);
+                if (unblocked == null) return null;
+                Tuple<String, String> normalized = normalizePlayUrl(new Tuple<>(unblocked.url, unblocked.format));
+                if (normalized == null) return null;
+                unblockedSourceLabel = unblocked.sourceLabel;
+                playbackQuality = detectCadencePlaybackQuality(normalized.getB(), requestedQuality);
+                considerHighestQuality(normalized.getB(), 0L);
+                return normalized;
+            }
+        }, "NetEase grey unblock", GD_PLAY_URL_RESOLVE_TIMEOUT_SECONDS);
+    }
+
+    /** 非空表示这一首正在播第三方源解出来的流；值就是徽标上显示的源名。 */
+    public String getUnblockedSourceLabel() {
+        String label = unblockedSourceLabel;
+        return label == null ? "" : label;
+    }
+
+    /** 官方链路取不到流，且「音乐是否可用」也判定为不可用。 */
+    public boolean isGreyDetected() {
+        return greyDetected;
     }
 
     /**

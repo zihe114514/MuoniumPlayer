@@ -6,6 +6,7 @@ import com.muoniumplayer.core.ncm.music.GdStudioMusicService;
 import com.muoniumplayer.core.ncm.music.CadenceMusicService;
 import com.muoniumplayer.core.ncm.music.GdStudioSourceSettings;
 import com.muoniumplayer.core.ncm.music.MusicPlatform;
+import com.muoniumplayer.core.ncm.music.NeteaseUnblockSettings;
 import com.muoniumplayer.core.rendering.font.CFontRenderer;
 import com.muoniumplayer.core.rendering.font.GlyphInkMetrics;
 import com.muoniumplayer.core.rendering.FontelloIcons;
@@ -51,7 +52,8 @@ public final class MusicSourceOverlay extends NCMPanel {
         choosingGdPlatform = false;
         getChildren().clear();
 
-        Panel dialog = createDialog(452, 418);
+        // 高度比原来多 34：底部多了一行解灰开关。底部说明文字按 height-26 贴底，会自动跟着下移。
+        Panel dialog = createDialog(452, 452);
         addTitle(dialog, "音乐来源", "官方音乐源与 GD音乐台 在线聚合源可独立切换");
 
         // 分组标题 / 卡片的纵向节奏：标题下 20 起第一张卡，两张卡之间留 8，换分组前留 14。
@@ -65,6 +67,8 @@ public final class MusicSourceOverlay extends NCMPanel {
 
         addSectionLabel(dialog, "在线聚合源", 292);
         addGdContentSource(dialog, 312);
+
+        addUnblockToggle(dialog, 380);
 
         LabelWidget detail = new LabelWidget("GD音乐台来源由 music-api.gdstudio.xyz 提供；请按上游服务的使用要求使用。", FontManager.pf12);
         dialog.addChild(detail);
@@ -428,6 +432,68 @@ public final class MusicSourceOverlay extends NCMPanel {
 
     private int gdTextColor() {
         return isGdActive() ? 0xFFFFFF : NCMScreen.getColor(NCMScreen.ColorType.PRIMARY_TEXT);
+    }
+
+    /**
+     * 「灰色歌曲解灰」开关。
+     *
+     * <p>放在音乐来源这一层而不是 HUD 配置里：它决定的就是「官方源没有流的时候要不要换一家」，
+     * 和这个面板讨论的是同一件事。</p>
+     */
+    private void addUnblockToggle(Panel dialog, final double y) {
+        final double rowHeight = 30.0;
+
+        RoundedRectWidget background = new RoundedRectWidget();
+        dialog.addChild(background);
+        background.setClickable(false);
+        background.setRadius(8);
+        background.setBeforeRenderCallback(() -> {
+            background.setBounds(Math.max(1, dialog.getWidth() - CARD_INSET * 2.0), rowHeight);
+            background.setPosition(CARD_INSET, y);
+            background.setColor(NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_BACKGROUND));
+        });
+
+        LabelWidget title = new LabelWidget("灰色歌曲解灰", FontManager.pf12bold);
+        dialog.addChild(title);
+        title.setClickable(false);
+        title.setBeforeRenderCallback(() -> {
+            title.setColor(NCMScreen.getColor(NCMScreen.ColorType.PRIMARY_TEXT));
+            title.setPosition(CARD_INSET + 12.0, y + (rowHeight - title.getHeight()) * .5);
+        });
+
+        LabelWidget hint = new LabelWidget("官方源无可播放流时，再到第三方源按曲名匹配", FontManager.pf12);
+        dialog.addChild(hint);
+        hint.setClickable(false);
+        hint.setBeforeRenderCallback(() -> {
+            hint.setColor(NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT));
+            hint.setMaxWidth(Math.max(1, dialog.getWidth() - CARD_INSET * 2.0 - 12.0 - 96.0
+                    - CHIP_INSET - CHIP_WIDTH - 8.0));
+            hint.setWidthLimitType(LabelWidget.WidthLimitType.TRIM_TO_WIDTH);
+            hint.setPosition(CARD_INSET + 12.0 + 96.0, y + (rowHeight - hint.getHeight()) * .5);
+        });
+
+        RoundedButtonWidget toggle = new RoundedButtonWidget(
+                () -> NeteaseUnblockSettings.isEnabled() ? "已开启" : "已关闭", FontManager.pf12bold);
+        dialog.addChild(toggle);
+        toggle.setRadius(CHIP_HEIGHT * .5);
+        toggle.setOnClickCallback((x, yy, button) -> {
+            if (button != 0) return false;
+            NeteaseUnblockSettings.setEnabled(!NeteaseUnblockSettings.isEnabled());
+            return true;
+        });
+        toggle.setBeforeRenderCallback(() -> {
+            toggle.setBounds(CHIP_WIDTH, CHIP_HEIGHT);
+            toggle.setPosition(Math.max(CARD_INSET,
+                            dialog.getWidth() - CARD_INSET - CHIP_INSET - CHIP_WIDTH),
+                    y + (rowHeight - CHIP_HEIGHT) * .5);
+            boolean enabled = NeteaseUnblockSettings.isEnabled();
+            int text = enabled ? 0xFFFFFF : NCMScreen.getColor(NCMScreen.ColorType.SECONDARY_TEXT);
+            int base = enabled
+                    ? NCMScreen.getColor(NCMScreen.ColorType.ACCENT)
+                    : NCMScreen.getColor(NCMScreen.ColorType.ELEMENT_BACKGROUND);
+            toggle.setColor(mix(base, text, toggle.isHovering() ? .18 : .0));
+            toggle.setTextColor(text);
+        });
     }
 
     private void addSectionLabel(Panel dialog, String text, double y) {

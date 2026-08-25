@@ -13,6 +13,7 @@ import com.muoniumplayer.core.settings.HudConfig;
 import com.muoniumplayer.core.screens.ncm.NCMTheme;
 import com.muoniumplayer.core.screens.ncm.NCMPlayerConfig;
 import com.muoniumplayer.core.ncm.music.GdStudioSourceSettings;
+import com.muoniumplayer.core.ncm.music.NeteaseUnblockSettings;
 import com.muoniumplayer.core.utils.other.multithreading.MultiThreadingUtil;
 import com.muoniumplayer.core.widget.impl.MusicInfoWidget;
 import com.muoniumplayer.core.widget.impl.MusicLyricsWidget;
@@ -55,6 +56,7 @@ public class MuoniumPlayerExtension {
         this.musicInfo.animatedCover.setValue(HudConfig.animatedCoverEnabled);
         NCMPlayerConfig.load();
         GdStudioSourceSettings.load();
+        NeteaseUnblockSettings.load();
         CloudMusic.quality = NCMPlayerConfig.getAudioQuality();
         MultiThreadingUtil.runAsync(CloudMusic::initNCM);
         Reflection.init(api);

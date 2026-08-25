@@ -483,10 +483,50 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
     }
 
 
+    /**
+     * 网易云灰色歌曲解灰：开始找第三方源。
+     *
+     * <p>走普通通知通道（不抢队、不做常驻）：这一步之前官方链路已经失败了，用户只需要知道
+     * 播放器还在尝试，不该压掉正在展示的别的卡片。</p>
+     */
+    public static void showNeteaseUnblockSearching(String trackName) {
+        publishNotice(IslandNoticeType.GD_SOURCE_LOADING, "正在尝试解灰",
+                safeNoticeValue(trackName, "当前歌曲") + " · 官方链路无可播放流");
+    }
+
+    /** 网易云灰色歌曲解灰成功，说清是哪一家给的流。 */
+    public static void showNeteaseUnblocked(String trackName, String sourceLabel, String format) {
+        publishNotice(IslandNoticeType.GD_SOURCE_SUCCESS, "已解灰 · " + safeNoticeValue(sourceLabel, "第三方源"),
+                safeNoticeValue(trackName, "当前歌曲") + " · "
+                        + safeNoticeValue(format, "未知").toUpperCase(java.util.Locale.ROOT));
+    }
+
+    /** 解灰也没找到；随后由既有的「没有可用音频源」流程停下等用户操作。 */
+    public static void showNeteaseUnblockFailure(String trackName) {
+        publishNotice(IslandNoticeType.GD_SOURCE_ERROR, "解灰失败",
+                safeNoticeValue(trackName, "当前歌曲") + " · 第三方源没有匹配到可播放版本");
+    }
+
     /** Gives login and account validation a distinct, non-download success feedback. */
     public static void showNetworkConnectionSuccess(String target) {
         publishNotice(IslandNoticeType.NETWORK_SUCCESS, "网络连接成功",
                 safeNoticeValue(target, "音乐服务") + " · 已建立连接");
+    }
+
+    /**
+     * 一起听：房里有非会员，VIP 专享曲在起播前被跳过。
+     *
+     * <p>走普通通知通道（不抢队）：歌已经换掉了，这条只是解释为什么。</p>
+     */
+    public static void showListenTogetherVipSkip(String trackName, String reason) {
+        publishNotice(IslandNoticeType.PLAY_NEXT, "一起听 · 已跳过本曲",
+                safeNoticeValue(trackName, "当前歌曲") + " · " + safeNoticeValue(reason, "房内有成员无法完整播放"));
+    }
+
+    /** 一起听：连着跳了几首之后整条列表都放不了，停下等用户处理。 */
+    public static void showListenTogetherNothingPlayable(int skipped) {
+        publishNotice(IslandNoticeType.NETWORK_ERROR, "一起听 · 没有可播曲目",
+                "连续跳过 " + Math.max(1, skipped) + " 首 VIP 专享 · 请换歌单或关掉自动跳过");
     }
 
     /** Gives login and account validation a distinct, readable connection failure feedback. */
