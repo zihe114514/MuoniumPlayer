@@ -1327,7 +1327,8 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
             if (ambientMix < .995f) {
                 float eventGlyphAlpha = glyphAlpha * (1f - ambientMix);
                 if (noticeMode) {
-                    renderNoticeIcon(activeNoticeType, iconX, iconY, eventGlyphAlpha, iconAccentColor, now);
+                    renderNoticeIcon(activeNoticeType, activeNoticeValue, iconX, iconY,
+                            eventGlyphAlpha, iconAccentColor, now);
                 } else {
                     renderSpinner(iconX, iconY, eventGlyphAlpha * (1f - success), iconAccentColor, now, preview);
                     renderSuccess(iconX, iconY, alpha * success * (1f - ambientMix));
@@ -1710,7 +1711,12 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
     }
 
     /**
-     * 条目小图标改用 island-status-icons 字体：帧率=心跳(U+E904)、延迟=链条(U+E903)、时间=时钟(U+E901)。
+     * 条目小图标改用图标字体：帧率=仪表盘（island-volume-icons 的 U+E902）、延迟=链条
+     * （island-status-icons 的 U+E903）、时间=时钟（island-status-icons 的 U+E901）。
+     *
+     * <p>帧率原来用的是心跳（island-status-icons U+E904），换成仪表盘：心跳的两段曲线在 9 像素
+     * 见方里几乎认不出，而仪表盘的指针指向能直接读出"快/慢"的含义。两枚图标分属不同字体，
+     * 所以取字形时必须把字体一起换掉。</p>
      *
      * <p>原来这三枚是用圆角矩形手工拼的。在 9 像素见方、还要再乘常驻缩放的尺寸下，手绘笔画的
      * 粗细和间距都落不到整数像素上，看起来发糊也认不出形状；字形是按字号栅格化过的，同样尺寸下
@@ -1719,16 +1725,20 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
     private void drawAmbientChipIcon(IslandAmbientStatus.Kind kind, double centerX, double centerY,
                                      float alpha, int accentColor, double scale) {
         if (alpha <= .01f) return;
-        String glyph = kind == IslandAmbientStatus.Kind.FPS ? IslandStatusIcons.PULSE
-                : (kind == IslandAmbientStatus.Kind.PING ? IslandStatusIcons.LINK
-                : IslandStatusIcons.CLOCK);
+        boolean fps = kind == IslandAmbientStatus.Kind.FPS;
         // 延迟(U+E903)与时间(U+E901)刻意不跟主题强调色走：这两枚是读数，需要在任何强调色下都
-        // 保持同样的可读性；帧率(U+E904)保留强调色，让常驻行仍然有一处跟随主题的着色点。
+        // 保持同样的可读性；帧率（仪表盘）保留强调色，让常驻行仍然有一处跟随主题的着色点。
         // 另外强调色本身可能就是低对比度的深色（部分浅色主题的强调色偏暗），染到深色胶囊上会糊成一团。
-        int color = kind == IslandAmbientStatus.Kind.FPS
+        int color = fps
                 ? RenderSystem.reAlpha(accentColor, alpha * .98f)
                 : hexColor(.86f, .90f, .98f, alpha * .94f);
-        drawAmbientGlyph(glyph, centerX, centerY, AMBIENT_ICON_WIDTH * scale, color);
+        if (fps) {
+            drawVolumeFontIcon(FontManager.islandVolumeIcon18, FontManager.ISLAND_VOLUME_ICON_SMALL,
+                    IslandVolumeIcons.GAUGE, centerX, centerY, AMBIENT_ICON_WIDTH * scale, color);
+            return;
+        }
+        drawAmbientGlyph(kind == IslandAmbientStatus.Kind.PING ? IslandStatusIcons.LINK
+                : IslandStatusIcons.CLOCK, centerX, centerY, AMBIENT_ICON_WIDTH * scale, color);
     }
 
     /** 把一枚图标字形等比缩放到目标边长并居中绘制。 */
@@ -1757,7 +1767,7 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
      * <ul>
      *   <li>正在播放页 → 当前歌曲封面（有动态封面时优先用它）；</li>
      *   <li>状态页 + 玩家在移动 → 跑步精灵动画；</li>
-     *   <li>状态页 + 玩家静止 → 心跳字形（U+E904）。</li>
+     *   <li>状态页 + 玩家静止 → 仪表盘字形（island-volume-icons 的 U+E902）。</li>
      * </ul>
      * 刻意不复用加载转子——常驻并不代表有任务在跑，用转子会误导成"正在加载"。
      */
@@ -1773,7 +1783,8 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
                 alpha, hexColor(.96f, .97f, 1f, alpha), now)) {
             return;
         }
-        drawAmbientGlyph(IslandStatusIcons.PULSE, centerX, centerY, glyphSize,
+        drawVolumeFontIcon(FontManager.islandVolumeIcon24, FontManager.ISLAND_VOLUME_ICON_LARGE,
+                IslandVolumeIcons.GAUGE, centerX, centerY, glyphSize,
                 RenderSystem.reAlpha(DynamicIslandMath.brightenAccent(accentColor, .18f), alpha));
     }
 
@@ -1875,7 +1886,12 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         return true;
     }
 
-    private void renderNoticeIcon(IslandNoticeType type, double centerX, double centerY,
+    /**
+     * @param valueText 这张卡片正在显示的副文案。音量图标要按它读回档位，不能去读
+     *                  {@code noticeValue} 静态字段：通知是排队播放的，字段早就被后来的
+     *                  {@code showVolume} 改掉了，图标会和屏幕上的百分比错档。
+     */
+    private void renderNoticeIcon(IslandNoticeType type, String valueText, double centerX, double centerY,
                                   float alpha, int accentColor, long now) {
         if (alpha <= .01f) return;
         int foreground = hexColor(.94f, .95f, .98f, alpha);
@@ -1931,18 +1947,9 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
             return;
         }
         if (type == IslandNoticeType.VOLUME) {
-            // Speaker body, cone and two sound pulses remain crisp at every island scale.
-            roundedRect(centerX - 5.6, centerY - 2.0, 2.3, 4.0, .7, foreground);
-            roundedRect(centerX - 3.7, centerY - 3.8, 3.6, 7.6, .8,
-                    RenderSystem.reAlpha(accentColor, alpha));
-            roundedRect(centerX + 2.0, centerY - 3.5, 1.1, 2.4, .55,
-                    RenderSystem.reAlpha(accentColor, alpha * .82f));
-            roundedRect(centerX + 3.8, centerY - 5.1, 1.1, 3.9, .55,
-                    RenderSystem.reAlpha(accentColor, alpha * .52f));
-            roundedRect(centerX + 2.0, centerY + 1.1, 1.1, 2.4, .55,
-                    RenderSystem.reAlpha(accentColor, alpha * .82f));
-            roundedRect(centerX + 3.8, centerY + 1.2, 1.1, 3.9, .55,
-                    RenderSystem.reAlpha(accentColor, alpha * .52f));
+            // 分档喇叭字形取代原来手绘的喇叭：手绘那版声波永远是两道，看不出当前音量大概在哪一档。
+            drawIslandVolumeIcon(volumeGlyph(DynamicIslandMath.parseNoticePercent(valueText)),
+                    centerX, centerY, alpha, foreground);
             return;
         }
         if (type == IslandNoticeType.PLAY_NEXT) {
@@ -2013,6 +2020,66 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
         double width = FontManager.islandIcon16.getStringWidthD(glyph);
         double height = Math.max(1.0, FontManager.islandIcon16.getFontHeight());
         FontManager.islandIcon16.drawString(glyph, centerX - width * .5, centerY - height * .5, color);
+    }
+
+    /** 通知托盘里音量图标的 em 方格边长。取 12px 是接着原来手绘喇叭的视觉体量（约 11.2px 宽）。 */
+    private static final double VOLUME_NOTICE_ICON_SIZE = 12.0;
+    /** island-volume-icons 的 hhea 上伸部 / em（实测 850/1000）。AWT 的 ascent 是它乘字号后向上取整。 */
+    private static final double VOLUME_ICON_ASCENT_EM = .85;
+    /** 这五枚字形的墨迹中心恒在基线上方 .35em（实测 glyf 边界，四档喇叭完全一致）。 */
+    private static final double VOLUME_ICON_INK_CENTER_EM = .35;
+
+    /**
+     * 用 island-volume-icons 字体画一枚居中的图标。
+     *
+     * <p>和 {@link #drawIslandStatusIcon} 必须分开：这两份字体在 U+E902~U+E904 上码位相同、
+     * 字形完全不同，走错字体就会画出对勾/链条而不是喇叭。</p>
+     */
+    private void drawIslandVolumeIcon(String glyph, double centerX, double centerY, float alpha, int color) {
+        if (alpha <= .01f) return;
+        drawVolumeFontIcon(FontManager.islandVolumeIcon24, FontManager.ISLAND_VOLUME_ICON_LARGE,
+                glyph, centerX, centerY, VOLUME_NOTICE_ICON_SIZE, color);
+    }
+
+    /**
+     * 按 em 方格把一枚 island-volume-icons 字形画到指定中心。
+     *
+     * <p>不能沿用「{@code getStringWidthD} / {@code getFontHeight} 各取一半」那套居中：</p>
+     * <ul>
+     *   <li>{@code getFontHeight()} 是给文本行距用的（内部减掉了 8.5），不是图集单元的真实高度，
+     *       拿它算缩放会把 6.5px 的单元硬放大到 12.5px，图标直接糊掉；</li>
+     *   <li>按每枚字形自己的宽度定尺寸会让四档喇叭大小不一：一道声波那枚的 advance 只有 .836em，
+     *       同样"填满目标宽度"会把它的喇叭锥体放大约 20%，切档时肉眼可见地一跳。</li>
+     * </ul>
+     *
+     * <p>所以统一按 em 方格算：{@code emTarget} 就是 1em 落屏后的边长，四档共用同一个缩放，
+     * 喇叭锥体固定不动、声波往右长出去。竖直方向用实测的墨迹中心（基线上方 .35em，五枚一致）
+     * 对齐，而不是行盒中心。字形原点落在方格左边，所以左上角要按 {@code emTarget} 的一半回退；
+     * {@code CFontRenderer.drawString} 内部还会把 y 抬 2px（缩放后即 2×scale），一并抵掉。</p>
+     *
+     * @param nominalSize 该字体注册时的名义字号：em 方格在图集里就是这么多像素，落屏是一半
+     */
+    private void drawVolumeFontIcon(CFontRenderer font, int nominalSize, String glyph,
+                                    double centerX, double centerY, double emTarget, int color) {
+        if (font == null || glyph == null || glyph.isEmpty() || emTarget <= .5 || nominalSize <= 0) return;
+        double emScreen = nominalSize * .5;
+        double scale = emTarget / emScreen;
+        double ascentScreen = Math.ceil(VOLUME_ICON_ASCENT_EM * nominalSize) * .5;
+        double drawX = centerX - emTarget * .5;
+        double drawY = centerY + VOLUME_ICON_INK_CENTER_EM * emTarget + 2.0 * scale
+                - scale * ascentScreen;
+        font.drawString(glyph, drawX, drawY, scale, color);
+    }
+
+    /**
+     * 音量档位 → 喇叭字形。四档的下界分别是 80 / 60 / 35 / 0：
+     * {@code [80,100]} 三道声波、{@code [60,80)} 两道、{@code [35,60)} 一道、{@code [0,35)} 静音喇叭。
+     */
+    static String volumeGlyph(int percent) {
+        if (percent >= 80) return IslandVolumeIcons.VOLUME_HIGH;
+        if (percent >= 60) return IslandVolumeIcons.VOLUME_MID;
+        if (percent >= 35) return IslandVolumeIcons.VOLUME_LOW;
+        return IslandVolumeIcons.VOLUME_MUTE;
     }
 
     private void renderSpinner(double centerX, double centerY, float alpha, int accentColor,
@@ -2194,7 +2261,8 @@ public final class DownloadDynamicIsland implements SharedConstants, SharedRende
             if (noticeMode) {
                 api.getGLStateManager().pushMatrix();
                 scaleAtPos(centerX, centerY, .64);
-                renderNoticeIcon(noticeType, centerX, centerY, alpha * eventMix, iconAccentColor, now);
+                renderNoticeIcon(noticeType, noticeValue, centerX, centerY, alpha * eventMix,
+                        iconAccentColor, now);
                 api.getGLStateManager().popMatrix();
             } else {
                 renderSpinner(centerX, centerY, alpha * (1f - success) * .72f * eventMix,

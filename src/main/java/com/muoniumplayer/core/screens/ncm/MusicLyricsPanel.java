@@ -93,6 +93,7 @@ public class MusicLyricsPanel implements SharedRenderingConstants, SharedConstan
         renderers[FullscreenLyricStyle.TILT.ordinal()] = new TiltLyricRenderer();
         renderers[FullscreenLyricStyle.DIORAMA.ordinal()] = new DioramaLyricRenderer();
         renderers[FullscreenLyricStyle.PENDOLO.ordinal()] = new PendoloLyricRenderer();
+        renderers[FullscreenLyricStyle.APPLE.ordinal()] = new AppleLyricRenderer();
         return renderers;
     }
 

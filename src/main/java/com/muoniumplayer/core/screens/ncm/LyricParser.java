@@ -433,7 +433,9 @@ public class LyricParser {
      * <p>只读取每个 {@code <p>} 的直接子 {@code <span>},避免把翻译、罗马音、和声嵌套 span
      * 当成主歌词的音节。{@code ttm:role} 的处理:{@code x-translation} 进 translationText,
      * {@code x-roman} 进 romanizationText,{@code x-bg}(和声)追加到主行词表末尾——本项目的
-     * LyricLine 没有独立的背景人声通道,新开一行会产生与主行时间重叠的行,滚动与高亮都会跳。</p>
+     * LyricLine 没有独立的背景人声通道,新开一行会产生与主行时间重叠的行,滚动与高亮都会跳。
+     * 追加时会给这些音节打上 {@link LyricLine.Word#background} 标记,想按 Apple Music 的排版把
+     * 和声单独排成一条小字行的样式据此还原两路数据,不读标记的样式行为完全不变。</p>
      *
      * <p>span 之间的空白文本节点是英文歌词的词间距,折进前一个词而不是生成时间戳为 0 的假词;
      * 缺少 begin 的文本同样只做拼接。解析失败(网络截断、非 XML、实体攻击)时返回空列表,由调用方
@@ -568,6 +570,9 @@ public class LyricParser {
             if (background.words.get(0).start < last.start) return;
             if (!last.text.endsWith(" ")) last.text += " ";
         }
+        // 追加进主行的同时留下和声标记：渲染模型上它们和主歌词的音节混在一条词表里，
+        // 想按 Apple 的排版把和声单独排一行，就只能靠这个标记把两路分开。
+        for (TimedText word : background.words) word.background = true;
         main.words.addAll(background.words);
         main.pendingPrefix = "";
     }
@@ -701,7 +706,9 @@ public class LyricParser {
     private static void addWords(LyricLine line, List<TimedText> words) {
         for (TimedText word : words) {
             if (word.text != null && !word.text.isEmpty()) {
-                line.words.add(new LyricLine.Word(word.text, Math.max(0L, word.start), Math.max(0L, word.duration)));
+                LyricLine.Word added = new LyricLine.Word(word.text, Math.max(0L, word.start), Math.max(0L, word.duration));
+                added.background = word.background;
+                line.words.add(added);
             }
         }
     }
@@ -726,7 +733,9 @@ public class LyricParser {
                 long nextStart = i + 1 < line.words.size() ? Math.max(start + 1L, line.words.get(i + 1).timestamp) : lineEnd;
                 long duration = word.duration > 0L ? word.duration : nextStart - start;
                 if (lineEnd > start) duration = Math.min(duration, lineEnd - start);
-                normalized.add(new LyricLine.Word(word.word, start, Math.max(1L, duration)));
+                LyricLine.Word copy = new LyricLine.Word(word.word, start, Math.max(1L, duration));
+                copy.background = word.background;
+                normalized.add(copy);
             }
             line.words.clear();
             line.words.addAll(normalized);
@@ -748,6 +757,8 @@ public class LyricParser {
         private String text;
         private final long start;
         private final long duration;
+        /** 这一段来自 {@code ttm:role="x-bg"} 的和声 span。 */
+        private boolean background;
 
         private TimedText(String text, long start, long duration) {
             this.text = text;

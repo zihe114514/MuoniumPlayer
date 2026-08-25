@@ -84,6 +84,22 @@ public class FontManager extends AbstractManager {
      */
     public static CFontRenderer islandIcon12, islandIcon16;
     /**
+     * 灵动岛音量/仪表图标字体（island-volume-icons，重映射后的 fontello U+E902~U+E906）。
+     *
+     * <p>不能并进 {@link #islandIcon12}：这两批字体在 U+E902~U+E904 上码位撞车而字形完全不同
+     * （对勾/链条/心跳 对 仪表盘/喇叭三档），合并任何一方都会被覆盖。</p>
+     *
+     * <p>字号按「落屏边长 × 2」选，和 {@link #settingsIcon24} 一条规矩：图集是 2 倍超采样、
+     * 落屏时固定再乘 0.5，只有额外倍率恰好为 1 时每个图集像素才正对一个屏幕像素。常驻条目的
+     * 图标方格是 9px（{@code 18}），通知托盘与常驻左侧标记是 12px（{@code 24}）。之前只注册
+     * 12/16 两档、再在绘制时放大 1.4~1.9 倍，正是图标发虚的原因。</p>
+     */
+    public static CFontRenderer islandVolumeIcon18, islandVolumeIcon24;
+    /** {@link #islandVolumeIcon18} 的名义字号；图标几何要按它换算 em 方格，不能写死。 */
+    public static final int ISLAND_VOLUME_ICON_SMALL = 18;
+    /** {@link #islandVolumeIcon24} 的名义字号。 */
+    public static final int ISLAND_VOLUME_ICON_LARGE = 24;
+    /**
      * HUD 设置界面的图标字体（hud-settings-icons，Material Design Icons round 一档，U+E200~E21F）。
      *
      * <p>三档字号对应 12 / 16 / 20 逻辑像素的图标方格：这份字体的每个字形都占满 1000 upem 的
@@ -172,6 +188,8 @@ public class FontManager extends AbstractManager {
         actionIcon38 = create(38, "player-action-icons");
         islandIcon12 = create(12, "island-status-icons");
         islandIcon16 = create(16, "island-status-icons");
+        islandVolumeIcon18 = create(ISLAND_VOLUME_ICON_SMALL, "island-volume-icons");
+        islandVolumeIcon24 = create(ISLAND_VOLUME_ICON_LARGE, "island-volume-icons");
 
         settingsIcon24 = create(24, "hud-settings-icons");
         settingsIcon32 = create(32, "hud-settings-icons");

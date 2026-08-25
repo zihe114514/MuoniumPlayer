@@ -24,7 +24,7 @@ public final class HudConfig {
     public static final int DYNAMIC_ISLAND_STYLE_MAX = 6;
 
     /** 全屏歌词样式索引上限,与 {@code FullscreenLyricStyle} 的数量保持一致。 */
-    public static final int FULLSCREEN_LYRIC_STYLE_MAX = 8;
+    public static final int FULLSCREEN_LYRIC_STYLE_MAX = 9;
 
     private static final File FILE = ConfigPaths.HUD;
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();

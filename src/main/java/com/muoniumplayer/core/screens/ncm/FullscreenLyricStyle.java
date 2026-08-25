@@ -40,7 +40,13 @@ public enum FullscreenLyricStyle {
     DIORAMA("镜台"),
 
     /** 时计：歌词沿一段圆弧排布，像钟面刻度一样绕过来。 */
-    PENDOLO("时计");
+    PENDOLO("时计"),
+
+    /**
+     * 苹果：仿 Apple Music —— 左对齐（对唱行右对齐）、逐音节点亮 + 音节弹跳、弹簧滚动、
+     * 长音节持续发光、前奏与间奏显示等待圆点。
+     */
+    APPLE("苹果");
 
     private final String displayName;
 

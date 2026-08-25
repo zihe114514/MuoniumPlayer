@@ -87,6 +87,19 @@ public class LyricLine {
         public float alpha = 0.0f;
         public double progress = 0.0;
 
+        /**
+         * 这个音节属于背景和声（TTML 的 {@code ttm:role="x-bg"}）。
+         *
+         * <p>{@link LyricParser#parseTtml} 把和声追加到主行词表末尾，从渲染模型上看它和主歌词
+         * 的音节没有区别。Apple Music 的歌词模型里和声是<b>独立于主人声的一路数据</b>
+         * （逆向笔记里 {@code line.backgroundVocals} 与 {@code filteredWords} 是两个字段，
+         * 连字典都各有一套 copy/resize），所以要复刻它的排版就必须能把这两路分开。</p>
+         *
+         * <p>默认 {@code false}，只有 TTML 的和声 span 会被标上。现有各套样式都不读这个标记，
+         * 行为一字不变；只有「苹果」样式据此把和声单独排成一条小字行。</p>
+         */
+        public boolean background = false;
+
         public Word(String word, long timestamp, long duration) {
             this.word = word;
             this.timestamp = timestamp;
