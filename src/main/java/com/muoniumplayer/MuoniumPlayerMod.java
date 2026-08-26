@@ -55,7 +55,7 @@ public class MuoniumPlayerMod {
 
     public static final String MOD_ID = "muonium";
     public static final String MOD_NAME = "MuoniumPlayer";
-    public static final String MOD_VERSION = "1.3.0";
+    public static final String MOD_VERSION = "1.4.0";
 
     /** 按键分类名，在「选项 → 控制」中作为分组标题显示。 */
     public static final String KEY_CATEGORY = "key.categories.muonium";
