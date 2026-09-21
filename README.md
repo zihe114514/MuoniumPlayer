@@ -1,11 +1,31 @@
 # MuoniumPlayer
 
+> [!WARNING]
+> ## 这条线（Minecraft 1.8.9 / Forge / Java 8）已经停止更新
+>
+> 最后一个版本是 **v1.4.0**（2026-08-26 发布）。此后不再更新功能、不再修 bug、不会再发新版，
+> 这个仓库继续留着只是为了存档。开发已经全部转到新的多版本线上：
+> **Minecraft 1.20.1 / 1.21.1 / 1.21.11 / 26.2**（Fabric + Forge / NeoForge）。
+
+| 你要做什么 | 去哪里 |
+| --- | --- |
+| 下载新版本，看安装与更新说明 | [MuoniumPlayer 官网 · 下载页](https://melodifymc.cc.cd/download) |
+| 看中文介绍、提意见、找作者反馈 | [mcmod 百科 · MuoniumPlayer](https://www.mcmod.cn/class/30544.html) |
+| 只能用 Minecraft 1.8.9 | [本仓库 Releases 的 v1.4.0](https://github.com/zihe114514/MuoniumPlayer/releases/tag/v1.4.0)（`MuoniumPlayer-1.4.0.jar`，能装能用，但不会再修） |
+
+**从 1.8.9 换过去不是「覆盖升级」** —— 那是换 Minecraft 本体与加载器。两条线都往 `config/muonium/`
+里写账号凭据与一部分设置，但 1.8.9 另外把 `muoniumplayer_config.json`、`muoniumplayer_hud.json`、
+`muoniumplayer_theme.json` 放在**游戏根目录**，且字段结构已经不同 —— 不保证新版本读得懂。
+换过去之后按新版本的首次运行重新设一遍、账号重新登录一次。
+
+下面这份 README 描述的是 **1.8.9 版**的功能与约定，保留作存档，不会随新版本更新。
+
 **在 Minecraft 里放歌的独立播放器 Mod。** 网易云 / QQ 音乐 / 酷狗音乐扫码登录、逐字歌词、桌面 HUD、灵动岛通知、无缝切歌、一起听，全部在游戏内完成，不需要挂后台播放器。
 
 [![Minecraft](https://img.shields.io/badge/Minecraft-1.8.9-green.svg)](#)
 [![Forge](https://img.shields.io/badge/Forge-11.15.1.2318-orange.svg)](#)
 [![Java](https://img.shields.io/badge/Java-8-blue.svg)](#)
-[![Version](https://img.shields.io/badge/version-1.3.0-blueviolet.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.4.0--FINAL-red.svg)](CHANGELOG.md)
 
 > 基于 [tritium-music](https://github.com/IzumiiKonata/tritium-music) 二次开发。
 
