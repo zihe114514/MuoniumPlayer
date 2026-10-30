@@ -10,8 +10,8 @@
 | 你要做什么 | 去哪里 |
 | --- | --- |
 | 下载新版本，看安装与更新说明 | [MuoniumPlayer 官网 · 下载页](https://melodifymc.cc.cd/download) |
-| 看中文介绍、提意见、找作者反馈 | [mcmod 百科 · MuoniumPlayer](https://www.mcmod.cn/class/30544.html) |
-| 只能用 Minecraft 1.8.9 | [本仓库 Releases 的 v1.4.0](https://github.com/zihe114514/MuoniumPlayer/releases/tag/v1.4.0)（`MuoniumPlayer-1.4.0.jar`，能装能用，但不会再修） |
+| 看中文介绍、提意见、找作者反馈 | [mcmod 百科 · MuoniumPlayer](https://www.mcmod.cn/class/30544.html) 
+| 新仓库 |(https://github.com/zihe114514/MuoniumPlayer-multiversion)（
 
 **从 1.8.9 换过去不是「覆盖升级」** —— 那是换 Minecraft 本体与加载器。两条线都往 `config/muonium/`
 里写账号凭据与一部分设置，但 1.8.9 另外把 `muoniumplayer_config.json`、`muoniumplayer_hud.json`、
